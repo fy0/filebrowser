@@ -228,3 +228,23 @@ export async function usage(url: string, signal: AbortSignal) {
     throw e;
   }
 }
+
+export async function extract(url: string, destination?: string) {
+  url = removePrefix(url);
+  let apiUrl = `/api/extract${url}`;
+  if (destination) {
+    apiUrl += `?destination=${encodeURIComponent(removePrefix(destination))}`;
+  }
+  const res = await fetchURL(apiUrl, { method: "POST" });
+  return res;
+}
+
+export function isArchiveFile(filename: string): boolean {
+  const lower = filename.toLowerCase();
+  return (
+    lower.endsWith(".zip") ||
+    lower.endsWith(".tar.gz") ||
+    lower.endsWith(".tgz") ||
+    lower.endsWith(".tar")
+  );
+}

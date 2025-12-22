@@ -292,6 +292,12 @@
             @action="download"
             :counter="fileStore.selectedCount"
           />
+          <action
+            v-if="headerButtons.extract"
+            icon="unarchive"
+            :label="t('buttons.extract')"
+            @action="extractArchive"
+          />
           <action icon="info" :label="t('buttons.info')" show="info" />
         </context-menu>
 
@@ -464,6 +470,14 @@ const viewIcon = computed(() => {
 });
 
 const headerButtons = computed(() => {
+  // Check if selected file is an archive
+  const canExtract =
+    fileStore.selectedCount === 1 &&
+    authStore.user?.perm.create &&
+    fileStore.req !== null &&
+    !fileStore.req.items[fileStore.selected[0]]?.isDir &&
+    api.isArchiveFile(fileStore.req.items[fileStore.selected[0]]?.name || "");
+
   return {
     upload: authStore.user?.perm.create,
     download: authStore.user?.perm.download,
@@ -473,6 +487,7 @@ const headerButtons = computed(() => {
     share: fileStore.selectedCount === 1 && authStore.user?.perm.share,
     move: fileStore.selectedCount > 0 && authStore.user?.perm.rename,
     copy: fileStore.selectedCount > 0 && authStore.user?.perm.create,
+    extract: canExtract,
   };
 });
 
@@ -1050,5 +1065,22 @@ const showContextMenu = (event: MouseEvent) => {
 
 const hideContextMenu = () => {
   isContextMenuVisible.value = false;
+};
+
+const extractArchive = async () => {
+  if (fileStore.req === null || fileStore.selectedCount !== 1) return;
+
+  const file = fileStore.req.items[fileStore.selected[0]];
+  if (!file || file.isDir) return;
+
+  layoutStore.loading = true;
+  try {
+    await api.extract(file.url);
+    fileStore.reload = true;
+  } catch (e: any) {
+    $showError(e);
+  } finally {
+    layoutStore.loading = false;
+  }
 };
 </script>

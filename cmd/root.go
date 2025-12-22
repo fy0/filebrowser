@@ -89,6 +89,7 @@ func init() {
 	flags.Uint32("socketPerm", 0666, "unix socket file permissions")
 	flags.String("cacheDir", "", "file cache directory (disabled if empty)")
 	flags.Int("imageProcessors", 4, "image processors count")
+	flags.String("defaults.locale", "zh-cn", "default locale for new users (e.g. en, zh-cn, zh-tw)")
 	addServerFlags(flags)
 }
 
@@ -384,7 +385,7 @@ func quickSetup(v *viper.Viper, s *storage.Storage) error {
 		UserHomeBasePath:      settings.DefaultUsersHomeBasePath,
 		Defaults: settings.UserDefaults{
 			Scope:          ".",
-			Locale:         "en",
+			Locale:         v.GetString("defaults.locale"),
 			SingleClick:    false,
 			AceEditorTheme: v.GetString("defaults.aceEditorTheme"),
 			Perm: users.Permissions{
