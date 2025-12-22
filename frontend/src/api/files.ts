@@ -229,12 +229,9 @@ export async function usage(url: string, signal: AbortSignal) {
   }
 }
 
-export async function extract(url: string, destination?: string) {
+export async function extract(url: string, mode: "here" | "subdir" = "here") {
   url = removePrefix(url);
-  let apiUrl = `/api/extract${url}`;
-  if (destination) {
-    apiUrl += `?destination=${encodeURIComponent(removePrefix(destination))}`;
-  }
+  const apiUrl = `/api/extract${url}?mode=${mode}`;
   const res = await fetchURL(apiUrl, { method: "POST" });
   return res;
 }

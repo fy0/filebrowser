@@ -295,8 +295,14 @@
           <action
             v-if="headerButtons.extract"
             icon="unarchive"
-            :label="t('buttons.extract')"
-            @action="extractArchive"
+            :label="t('buttons.extractHere')"
+            @action="extractHere"
+          />
+          <action
+            v-if="headerButtons.extract"
+            icon="folder_zip"
+            :label="t('buttons.extractToFolder')"
+            @action="extractToFolder"
           />
           <action icon="info" :label="t('buttons.info')" show="info" />
         </context-menu>
@@ -1067,7 +1073,7 @@ const hideContextMenu = () => {
   isContextMenuVisible.value = false;
 };
 
-const extractArchive = async () => {
+const extractHere = async () => {
   if (fileStore.req === null || fileStore.selectedCount !== 1) return;
 
   const file = fileStore.req.items[fileStore.selected[0]];
@@ -1075,7 +1081,24 @@ const extractArchive = async () => {
 
   layoutStore.loading = true;
   try {
-    await api.extract(file.url);
+    await api.extract(file.url, "here");
+    fileStore.reload = true;
+  } catch (e: any) {
+    $showError(e);
+  } finally {
+    layoutStore.loading = false;
+  }
+};
+
+const extractToFolder = async () => {
+  if (fileStore.req === null || fileStore.selectedCount !== 1) return;
+
+  const file = fileStore.req.items[fileStore.selected[0]];
+  if (!file || file.isDir) return;
+
+  layoutStore.loading = true;
+  try {
+    await api.extract(file.url, "subdir");
     fileStore.reload = true;
   } catch (e: any) {
     $showError(e);

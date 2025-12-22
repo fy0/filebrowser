@@ -11,22 +11,16 @@ import (
 	"net/url"
 	"os"
 	"path"
-	"path/filepath"
 	"strings"
 
 	"github.com/spf13/afero"
 
-	fberrors "github.com/filebrowser/filebrowser/v2/errors"
 	"github.com/filebrowser/filebrowser/v2/files"
 )
 
-// ExtractRequest represents a request to extract an archive
-type ExtractRequest struct {
-	Destination string `json:"destination"` // Destination directory (optional, defaults to same directory as archive)
-}
-
 // extractHandler handles archive extraction requests
-// POST /api/extract/{path} with optional ?destination=... query parameter
+// POST /api/extract/{path}?destination=...&mode=...
+// mode: "here" (extract to same directory) or "subdir" (extract to subdirectory named after archive)
 var extractHandler = withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
 	if !d.user.Perm.Create {
 		return http.StatusForbidden, nil
@@ -52,14 +46,21 @@ var extractHandler = withUser(func(w http.ResponseWriter, r *http.Request, d *da
 	}
 
 	// Determine destination directory
+	mode := r.URL.Query().Get("mode")
 	destination := r.URL.Query().Get("destination")
+
 	if destination != "" {
 		destination, err = url.QueryUnescape(destination)
 		if err != nil {
 			return http.StatusBadRequest, err
 		}
+	} else if mode == "subdir" {
+		// Extract to subdirectory named after archive (without extension)
+		baseName := path.Base(archivePath)
+		dirName := getArchiveBaseName(baseName)
+		destination = path.Join(path.Dir(archivePath), dirName)
 	} else {
-		// Default to same directory as the archive
+		// Default: extract to same directory as the archive
 		destination = path.Dir(archivePath)
 	}
 
@@ -93,6 +94,23 @@ var extractHandler = withUser(func(w http.ResponseWriter, r *http.Request, d *da
 	return http.StatusOK, nil
 })
 
+// getArchiveBaseName removes archive extensions from filename
+func getArchiveBaseName(filename string) string {
+	lower := strings.ToLower(filename)
+	switch {
+	case strings.HasSuffix(lower, ".tar.gz"):
+		return filename[:len(filename)-7]
+	case strings.HasSuffix(lower, ".tgz"):
+		return filename[:len(filename)-4]
+	case strings.HasSuffix(lower, ".tar"):
+		return filename[:len(filename)-4]
+	case strings.HasSuffix(lower, ".zip"):
+		return filename[:len(filename)-4]
+	default:
+		return filename
+	}
+}
+
 // extractZip extracts a ZIP archive using streaming (low memory usage)
 func extractZip(afs afero.Fs, archivePath, destination string, fileMode, dirMode os.FileMode) error {
 	// Get the real path for zip.OpenReader
@@ -119,19 +137,15 @@ func extractZip(afs afero.Fs, archivePath, destination string, fileMode, dirMode
 
 // extractZipFile extracts a single file from a ZIP archive
 func extractZipFile(afs afero.Fs, f *zip.File, destination string, fileMode, dirMode os.FileMode) error {
-	// Validate and sanitize the file path to prevent zip slip
-	filePath := filepath.Clean(f.Name)
-	if strings.HasPrefix(filePath, "..") || strings.HasPrefix(filePath, "/") {
+	// Sanitize the file path - use forward slashes consistently
+	filePath := path.Clean(f.Name)
+
+	// Check for path traversal attack (zip slip)
+	if strings.HasPrefix(filePath, "../") || strings.HasPrefix(filePath, "/") || strings.Contains(filePath, "/../") {
 		return fmt.Errorf("invalid file path in archive: %s", f.Name)
 	}
 
-	targetPath := path.Join(destination, filepath.ToSlash(filePath))
-
-	// Check for zip slip attack
-	if !strings.HasPrefix(targetPath, filepath.Clean(destination)+string(os.PathSeparator)) &&
-		targetPath != filepath.Clean(destination) {
-		return fmt.Errorf("illegal file path: %s", f.Name)
-	}
+	targetPath := path.Join(destination, filePath)
 
 	if f.FileInfo().IsDir() {
 		return afs.MkdirAll(targetPath, dirMode)
@@ -225,19 +239,15 @@ func extractTarReader(afs afero.Fs, reader io.Reader, destination string, fileMo
 			return fmt.Errorf("failed to read tar header: %w", err)
 		}
 
-		// Validate and sanitize the file path
-		filePath := filepath.Clean(header.Name)
-		if strings.HasPrefix(filePath, "..") || strings.HasPrefix(filePath, "/") {
+		// Sanitize the file path - use forward slashes consistently
+		filePath := path.Clean(header.Name)
+
+		// Check for path traversal attack
+		if strings.HasPrefix(filePath, "../") || strings.HasPrefix(filePath, "/") || strings.Contains(filePath, "/../") {
 			return fmt.Errorf("invalid file path in archive: %s", header.Name)
 		}
 
-		targetPath := path.Join(destination, filepath.ToSlash(filePath))
-
-		// Check for path traversal attack
-		if !strings.HasPrefix(targetPath, filepath.Clean(destination)+string(os.PathSeparator)) &&
-			targetPath != filepath.Clean(destination) {
-			return fmt.Errorf("illegal file path: %s", header.Name)
-		}
+		targetPath := path.Join(destination, filePath)
 
 		switch header.Typeflag {
 		case tar.TypeDir:
@@ -296,6 +306,3 @@ func isArchiveFile(filename string) bool {
 	}
 	return false
 }
-
-// Ensure fberrors is used (for future use)
-var _ = fberrors.ErrNotExist

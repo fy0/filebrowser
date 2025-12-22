@@ -47,7 +47,8 @@
     "editAsText": "以文本形式编辑",
     "increaseFontSize": "增大字体大小",
     "decreaseFontSize": "减小字体大小",
-    "extract": "解压"
+    "extractHere": "解压到此处",
+    "extractToFolder": "解压到文件夹"
   },
   "download": {
     "downloadFile": "下载文件",
