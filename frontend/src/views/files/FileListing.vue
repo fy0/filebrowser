@@ -45,6 +45,12 @@
             :label="t('buttons.delete')"
             show="delete"
           />
+          <action
+            v-if="headerButtons.extract"
+            icon="unarchive"
+            :label="t('buttons.extract')"
+            show="extract"
+          />
         </template>
 
         <action
@@ -114,6 +120,12 @@
         icon="delete"
         :label="t('buttons.delete')"
         show="delete"
+      />
+      <action
+        v-if="headerButtons.extract"
+        icon="unarchive"
+        :label="t('buttons.extract')"
+        show="extract"
       />
     </div>
 

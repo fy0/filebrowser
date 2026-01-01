@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path"
+	"path/filepath"
 	"strings"
 
 	"github.com/spf13/afero"
@@ -137,22 +138,25 @@ func extractZip(afs afero.Fs, archivePath, destination string, fileMode, dirMode
 
 // extractZipFile extracts a single file from a ZIP archive
 func extractZipFile(afs afero.Fs, f *zip.File, destination string, fileMode, dirMode os.FileMode) error {
-	// Sanitize the file path - use forward slashes consistently
-	filePath := path.Clean(f.Name)
+	// Normalize path separators: convert backslashes to forward slashes first (for Windows-created archives)
+	// then use path.Clean for validation
+	filePath := strings.ReplaceAll(f.Name, "\\", "/")
+	filePath = path.Clean(filePath)
 
 	// Check for path traversal attack (zip slip)
 	if strings.HasPrefix(filePath, "../") || strings.HasPrefix(filePath, "/") || strings.Contains(filePath, "/../") {
 		return fmt.Errorf("invalid file path in archive: %s", f.Name)
 	}
 
-	targetPath := path.Join(destination, filePath)
+	// Convert to OS-specific path separators for file system operations
+	targetPath := filepath.Join(destination, filepath.FromSlash(filePath))
 
 	if f.FileInfo().IsDir() {
 		return afs.MkdirAll(targetPath, dirMode)
 	}
 
 	// Create parent directory
-	if err := afs.MkdirAll(path.Dir(targetPath), dirMode); err != nil {
+	if err := afs.MkdirAll(filepath.Dir(targetPath), dirMode); err != nil {
 		return err
 	}
 
@@ -239,15 +243,18 @@ func extractTarReader(afs afero.Fs, reader io.Reader, destination string, fileMo
 			return fmt.Errorf("failed to read tar header: %w", err)
 		}
 
-		// Sanitize the file path - use forward slashes consistently
-		filePath := path.Clean(header.Name)
+		// Normalize path separators: convert backslashes to forward slashes first (for Windows-created archives)
+		// then use path.Clean for validation
+		filePath := strings.ReplaceAll(header.Name, "\\", "/")
+		filePath = path.Clean(filePath)
 
 		// Check for path traversal attack
 		if strings.HasPrefix(filePath, "../") || strings.HasPrefix(filePath, "/") || strings.Contains(filePath, "/../") {
 			return fmt.Errorf("invalid file path in archive: %s", header.Name)
 		}
 
-		targetPath := path.Join(destination, filePath)
+		// Convert to OS-specific path separators for file system operations
+		targetPath := filepath.Join(destination, filepath.FromSlash(filePath))
 
 		switch header.Typeflag {
 		case tar.TypeDir:
@@ -257,7 +264,7 @@ func extractTarReader(afs afero.Fs, reader io.Reader, destination string, fileMo
 
 		case tar.TypeReg:
 			// Create parent directory
-			if err := afs.MkdirAll(path.Dir(targetPath), dirMode); err != nil {
+			if err := afs.MkdirAll(filepath.Dir(targetPath), dirMode); err != nil {
 				return err
 			}
 

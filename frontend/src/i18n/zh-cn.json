@@ -48,7 +48,8 @@
     "increaseFontSize": "增大字体大小",
     "decreaseFontSize": "减小字体大小",
     "extractHere": "解压到此处",
-    "extractToFolder": "解压到文件夹"
+    "extractToFolder": "解压到文件夹",
+    "extract": "解压"
   },
   "download": {
     "downloadFile": "下载文件",
@@ -134,6 +135,8 @@
     "displayName": "名称：",
     "download": "下载文件",
     "downloadMessage": "请选择要下载的压缩格式。",
+    "extract": "解压文件",
+    "extractMessage": "请选择解压方式。",
     "error": "出了一点问题...",
     "fileInfo": "文件信息",
     "filesSelected": "已选择 {count} 个文件。",

@@ -48,7 +48,8 @@
     "increaseFontSize": "Increase font size",
     "decreaseFontSize": "Decrease font size",
     "extractHere": "Extract here",
-    "extractToFolder": "Extract to folder"
+    "extractToFolder": "Extract to folder",
+    "extract": "Extract"
   },
   "download": {
     "downloadFile": "Download File",
@@ -134,6 +135,8 @@
     "displayName": "Display Name:",
     "download": "Download files",
     "downloadMessage": "Choose the format you wish to download.",
+    "extract": "Extract files",
+    "extractMessage": "Choose how to extract the archive.",
     "error": "Something went wrong",
     "fileInfo": "File information",
     "filesSelected": "{count} files selected.",
