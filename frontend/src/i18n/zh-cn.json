@@ -48,7 +48,7 @@
     "increaseFontSize": "增大字体大小",
     "decreaseFontSize": "减小字体大小",
     "extractHere": "解压到此处",
-    "extractToFolder": "解压到文件夹",
+    "extractToFolder": "解压为文件夹",
     "extract": "解压"
   },
   "download": {
@@ -286,5 +286,24 @@
     "minutes": "分钟",
     "seconds": "秒",
     "unit": "时间单位"
+  },
+  "seal": {
+    "title": "海豹助手",
+    "importBackup": "导入备份",
+    "importing": "导入中...",
+    "downloadLatest": "下载最新备份",
+    "viewBackups": "查看备份",
+    "importSuccess": "备份导入成功！",
+    "noBackupsFound": "没有找到备份文件",
+    "invalidFileType": "请选择 .zip 格式的备份文件",
+    "expand": "展开海豹助手",
+    "collapse": "收起海豹助手",
+    "importWarningTitle": "导入备份警告",
+    "importWarningMessage": "导入备份操作将执行以下操作：",
+    "importWarningItem1": "清除 sealdice/data 目录下的所有数据",
+    "importWarningItem2": "使用备份文件覆盖数据",
+    "importWarningItem3": "请先在服务页面手动停止海豹服务后再执行此操作",
+    "importWarningDisclaimer": "如产生数据丢失等情况概不负责！",
+    "confirmImport": "我已了解，继续导入"
   }
 }

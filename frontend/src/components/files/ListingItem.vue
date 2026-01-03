@@ -271,6 +271,9 @@ const click = (event: Event | KeyboardEvent) => {
       fileStore.multiple
     ) {
       fileStore.removeSelected(props.index);
+    } else if (touches.value === 1 && fileStore.selected.length === 1) {
+      // 只选中一个文件时，再点击（非双击）取消选择
+      fileStore.selected = [];
     } else {
       fileStore.selected = [props.index];
     }

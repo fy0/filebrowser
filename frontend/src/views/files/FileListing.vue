@@ -350,6 +350,9 @@
         </div>
       </div>
     </template>
+
+    <!-- 海豹助手工具条 -->
+    <SealToolbar :isMobile="isMobile" />
   </div>
 </template>
 
@@ -371,6 +374,7 @@ import Action from "@/components/header/Action.vue";
 import Search from "@/components/Search.vue";
 import Item from "@/components/files/ListingItem.vue";
 import ContextMenu from "@/components/ContextMenu.vue";
+import SealToolbar from "@/components/SealToolbar.vue";
 import {
   computed,
   inject,

@@ -286,5 +286,24 @@
     "minutes": "Minutes",
     "seconds": "Seconds",
     "unit": "Time Unit"
+  },
+  "seal": {
+    "title": "Seal Assistant",
+    "importBackup": "Import Backup",
+    "importing": "Importing...",
+    "downloadLatest": "Download Latest",
+    "viewBackups": "View Backups",
+    "importSuccess": "Backup imported successfully!",
+    "noBackupsFound": "No backup files found",
+    "invalidFileType": "Please select a .zip backup file",
+    "expand": "Expand Seal Assistant",
+    "collapse": "Collapse Seal Assistant",
+    "importWarningTitle": "Import Backup Warning",
+    "importWarningMessage": "The import operation will perform the following:",
+    "importWarningItem1": "Clear all data in sealdice/data directory",
+    "importWarningItem2": "Overwrite with backup data",
+    "importWarningItem3": "Please stop Seal service manually on the service page before proceeding",
+    "importWarningDisclaimer": "We are not responsible for any data loss!",
+    "confirmImport": "I understand, proceed with import"
   }
 }
