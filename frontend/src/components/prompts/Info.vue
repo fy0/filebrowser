@@ -36,6 +36,21 @@
         </p>
       </template>
 
+      <p v-if="dir && selected.length < 2">
+        <strong>{{ $t("prompts.directorySize") }}:</strong>
+        <span v-if="dirSizeBytes !== null">{{ formatBytes(dirSizeBytes) }}</span>
+        <span v-else-if="dirSizeLoading">{{ $t("files.loading") }}</span>
+        <span v-else>-</span>
+        <button
+          class="button button--flat"
+          type="button"
+          @click="calculateDirSize"
+          :disabled="dirSizeLoading"
+        >
+          {{ $t("buttons.calculate") }}
+        </button>
+      </p>
+
       <template v-if="!dir">
         <p>
           <strong>MD5: </strong
@@ -110,6 +125,13 @@ import { files as api } from "@/api";
 export default {
   name: "info",
   inject: ["$showError"],
+  data: function () {
+    return {
+      dirSizeBytes: null,
+      dirSizeLoading: false,
+      dirSizeAbortController: null,
+    };
+  },
   computed: {
     ...mapState(useFileStore, [
       "req",
@@ -173,6 +195,49 @@ export default {
   },
   methods: {
     ...mapActions(useLayoutStore, ["closeHovers"]),
+    resetDirSize: function () {
+      if (this.dirSizeAbortController) {
+        this.dirSizeAbortController.abort();
+        this.dirSizeAbortController = null;
+      }
+      this.dirSizeLoading = false;
+      this.dirSizeBytes = null;
+    },
+    formatBytes: function (bytes) {
+      return filesize(bytes);
+    },
+    calculateDirSize: async function () {
+      if (!this.dir || this.selected.length > 1 || this.dirSizeLoading) {
+        return;
+      }
+
+      this.resetDirSize();
+
+      this.dirSizeLoading = true;
+      const abortController = new AbortController();
+      this.dirSizeAbortController = abortController;
+
+      let target;
+      if (this.selectedCount) {
+        target = this.req.items[this.selected[0]].url;
+      } else {
+        target = this.$route.path;
+      }
+
+      try {
+        const result = await api.dirSize(target, abortController.signal);
+        if (this.dirSizeAbortController !== abortController) return;
+        this.dirSizeBytes = result.size;
+      } catch (e) {
+        if (e instanceof DOMException && e.name === "AbortError") return;
+        this.$showError(e);
+      } finally {
+        if (this.dirSizeAbortController === abortController) {
+          this.dirSizeLoading = false;
+          this.dirSizeAbortController = null;
+        }
+      }
+    },
     checksum: async function (event, algo) {
       event.preventDefault();
 
@@ -191,6 +256,17 @@ export default {
         this.$showError(e);
       }
     },
+  },
+  watch: {
+    selected: function () {
+      this.resetDirSize();
+    },
+    "$route.path": function () {
+      this.resetDirSize();
+    },
+  },
+  beforeUnmount: function () {
+    this.resetDirSize();
   },
 };
 </script>

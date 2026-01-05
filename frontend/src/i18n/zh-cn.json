@@ -1,5 +1,6 @@
 {
   "buttons": {
+    "calculate": "计算",
     "cancel": "取消",
     "clear": "清空",
     "close": "关闭",
@@ -157,6 +158,7 @@
     "schedule": "计划",
     "scheduleMessage": "请选择发布这篇帖子的日期与时间。",
     "show": "点击以显示",
+    "directorySize": "目录总大小",
     "size": "大小",
     "upload": "上传",
     "uploadFiles": "正在上传 {files} ...",
@@ -304,6 +306,14 @@
     "importWarningItem2": "使用备份文件覆盖数据",
     "importWarningItem3": "请先在服务页面手动停止海豹服务后再执行此操作",
     "importWarningDisclaimer": "如产生数据丢失等情况概不负责！",
-    "confirmImport": "我已了解，继续导入"
+    "confirmImport": "我已了解，继续导入",
+    "uploading": "正在上传...",
+    "existingBackupTitle": "发现已存在的备份文件",
+    "existingBackupMessage": "检测到已有上传的备份文件，您可以直接使用该文件或上传新的备份文件。",
+    "fileSize": "文件大小",
+    "fileModified": "修改时间",
+    "useExisting": "使用已有文件",
+    "uploadNew": "上传新文件",
+    "invalidZipFile": "备份文件校验失败，文件可能已损坏"
   }
 }

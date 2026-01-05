@@ -1,5 +1,6 @@
 {
   "buttons": {
+    "calculate": "Calculate",
     "cancel": "Cancel",
     "clear": "Clear",
     "close": "Close",
@@ -157,6 +158,7 @@
     "schedule": "Schedule",
     "scheduleMessage": "Pick a date and time to schedule the publication of this post.",
     "show": "Show",
+    "directorySize": "Directory size",
     "size": "Size",
     "upload": "Upload",
     "uploadFiles": "Uploading {files} files...",
@@ -304,6 +306,14 @@
     "importWarningItem2": "Overwrite with backup data",
     "importWarningItem3": "Please stop Seal service manually on the service page before proceeding",
     "importWarningDisclaimer": "We are not responsible for any data loss!",
-    "confirmImport": "I understand, proceed with import"
+    "confirmImport": "I understand, proceed with import",
+    "uploading": "Uploading...",
+    "existingBackupTitle": "Existing Backup Found",
+    "existingBackupMessage": "An uploaded backup file already exists. You can use it directly or upload a new one.",
+    "fileSize": "File Size",
+    "fileModified": "Modified",
+    "useExisting": "Use Existing",
+    "uploadNew": "Upload New",
+    "invalidZipFile": "Backup file validation failed, the file may be corrupted"
   }
 }

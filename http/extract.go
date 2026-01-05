@@ -13,8 +13,10 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/spf13/afero"
+	"golang.org/x/text/encoding/simplifiedchinese"
 
 	"github.com/filebrowser/filebrowser/v2/files"
 )
@@ -136,11 +138,51 @@ func extractZip(afs afero.Fs, archivePath, destination string, fileMode, dirMode
 	return nil
 }
 
+// decodeZipFileName attempts to decode a zip file name that may be GBK encoded
+func decodeZipFileName(name string, flags uint16) string {
+	// If UTF-8 flag is set (bit 11), the name is already UTF-8
+	if flags&(1<<11) != 0 {
+		return name
+	}
+
+	// Check if the name is valid UTF-8
+	if utf8.ValidString(name) {
+		// Check if it contains any non-ASCII characters that look like valid UTF-8
+		hasNonASCII := false
+		for _, r := range name {
+			if r > 127 {
+				hasNonASCII = true
+				break
+			}
+		}
+		// If it's pure ASCII or looks like valid UTF-8 Chinese, use as-is
+		if !hasNonASCII {
+			return name
+		}
+	}
+
+	// Try to decode as GBK
+	decoded, err := simplifiedchinese.GBK.NewDecoder().String(name)
+	if err != nil {
+		return name // Return original if decoding fails
+	}
+
+	// Verify the decoded string is valid UTF-8
+	if utf8.ValidString(decoded) {
+		return decoded
+	}
+
+	return name
+}
+
 // extractZipFile extracts a single file from a ZIP archive
 func extractZipFile(afs afero.Fs, f *zip.File, destination string, fileMode, dirMode os.FileMode) error {
+	// Decode file name (handle GBK encoding)
+	fileName := decodeZipFileName(f.Name, f.Flags)
+
 	// Normalize path separators: convert backslashes to forward slashes first (for Windows-created archives)
 	// then use path.Clean for validation
-	filePath := strings.ReplaceAll(f.Name, "\\", "/")
+	filePath := strings.ReplaceAll(fileName, "\\", "/")
 	filePath = path.Clean(filePath)
 
 	// Check for path traversal attack (zip slip)

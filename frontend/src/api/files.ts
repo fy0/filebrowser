@@ -188,6 +188,12 @@ export async function checksum(url: string, algo: ChecksumAlg) {
   return (await data.json()).checksums[algo];
 }
 
+export async function dirSize(url: string, signal?: AbortSignal) {
+  url = removePrefix(url);
+  const res = await fetchURL(`/api/dirsize${url}`, { signal });
+  return (await res.json()) as { size: number; numFiles: number; numDirs: number };
+}
+
 export function getDownloadURL(file: ResourceItem, inline: any) {
   const params = {
     ...(inline && { inline: "true" }),

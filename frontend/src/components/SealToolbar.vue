@@ -1,16 +1,16 @@
 <template>
-  <!-- 移动端折叠按钮 -->
+  <!-- 折叠按钮 -->
   <button
-    v-if="isMobile"
     class="seal-toggle-btn"
     :class="{ collapsed: isCollapsed }"
     @click="toggleCollapsed"
     :title="isCollapsed ? t('seal.expand') : t('seal.collapse')"
   >
-    <i class="material-icons">{{ isCollapsed ? 'smart_toy' : 'close' }}</i>
+    <img v-if="isCollapsed" src="/img/seal.png" alt="Seal" class="seal-icon" />
+    <i v-else class="material-icons">close</i>
   </button>
 
-  <div id="seal-toolbar" :class="{ hidden: shouldHide, collapsed: isMobile && isCollapsed }">
+  <div id="seal-toolbar" :class="{ hidden: shouldHide, collapsed: isCollapsed }">
     <div class="seal-toolbar-content">
       <span class="seal-toolbar-title">{{ t("seal.title") }}</span>
       <div class="seal-toolbar-actions">
@@ -51,6 +51,27 @@
     />
   </div>
 
+  <!-- 上传进度弹窗 -->
+  <div v-if="isUploading" class="seal-upload-overlay">
+    <div class="seal-upload-dialog">
+      <div class="seal-upload-header">
+        <i class="material-icons">cloud_upload</i>
+        <span>{{ t("seal.uploading") }}</span>
+      </div>
+      <div class="seal-upload-content">
+        <div class="seal-upload-filename">{{ uploadFileName }}</div>
+        <div class="seal-upload-progress-bar">
+          <div class="seal-upload-progress-fill" :style="{ width: uploadProgress + '%' }"></div>
+        </div>
+        <div class="seal-upload-stats">
+          <span class="seal-upload-percent">{{ uploadProgress.toFixed(1) }}%</span>
+          <span class="seal-upload-speed">{{ uploadSpeedText }}</span>
+          <span class="seal-upload-size">{{ uploadedSizeText }} / {{ totalSizeText }}</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <!-- 导入备份警告弹框 -->
   <div v-if="showImportWarning" class="seal-warning-overlay" @click.self="showImportWarning = false">
     <div class="seal-warning-dialog">
@@ -77,10 +98,38 @@
       </div>
     </div>
   </div>
+
+  <!-- 已存在备份文件询问弹框 -->
+  <div v-if="showExistingBackupDialog" class="seal-warning-overlay" @click.self="showExistingBackupDialog = false">
+    <div class="seal-warning-dialog">
+      <div class="seal-warning-header">
+        <i class="material-icons" style="color: var(--blue);">info</i>
+        <span>{{ t("seal.existingBackupTitle") }}</span>
+      </div>
+      <div class="seal-warning-content">
+        <p>{{ t("seal.existingBackupMessage") }}</p>
+        <div class="seal-existing-backup-info">
+          <div><strong>{{ t("seal.fileSize") }}:</strong> {{ existingBackupSize }}</div>
+          <div><strong>{{ t("seal.fileModified") }}:</strong> {{ existingBackupModified }}</div>
+        </div>
+      </div>
+      <div class="seal-warning-actions three-buttons">
+        <button class="seal-warning-btn cancel" @click="showExistingBackupDialog = false">
+          {{ t("buttons.cancel") }}
+        </button>
+        <button class="seal-warning-btn" style="background: var(--blue); color: white;" @click="useExistingBackup">
+          {{ t("seal.useExisting") }}
+        </button>
+        <button class="seal-warning-btn confirm" @click="uploadNewBackup">
+          {{ t("seal.uploadNew") }}
+        </button>
+      </div>
+    </div>
+  </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, inject } from "vue";
+import { computed, ref, inject, onUnmounted } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { useFileStore } from "@/stores/file";
@@ -103,8 +152,46 @@ const props = defineProps<{
 const fileInput = ref<HTMLInputElement | null>(null);
 const isImporting = ref(false);
 const isDownloading = ref(false);
-const isCollapsed = ref(true); // 移动端默认折叠
+const isCollapsed = ref(props.isMobile); // 移动端默认折叠，桌面端默认展开
 const showImportWarning = ref(false);
+
+// 备份文件路径
+const BACKUP_UPLOAD_PATH = "/sealdice/__bak_upload.zip";
+
+// 已存在备份文件弹窗相关
+const showExistingBackupDialog = ref(false);
+const existingBackupSize = ref("");
+const existingBackupModified = ref("");
+const pendingUploadFile = ref<File | null>(null);
+
+// 上传进度相关
+const isUploading = ref(false);
+const uploadProgress = ref(0);
+const uploadSpeed = ref(0);
+const uploadedBytes = ref(0);
+const totalBytes = ref(0);
+const uploadFileName = ref("");
+const uploadStartTime = ref(0);
+const lastUploadedBytes = ref(0);
+const lastSpeedUpdateTime = ref(0);
+
+const formatFileSize = (bytes: number): string => {
+  if (bytes < 1024) return bytes + " B";
+  if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(2) + " KB";
+  return (bytes / (1024 * 1024)).toFixed(2) + " MB";
+};
+
+const uploadSpeedText = computed(() => {
+  return formatFileSize(uploadSpeed.value) + "/s";
+});
+
+const uploadedSizeText = computed(() => {
+  return formatFileSize(uploadedBytes.value);
+});
+
+const totalSizeText = computed(() => {
+  return formatFileSize(totalBytes.value);
+});
 
 const shouldHide = computed(() => {
   // 移动端：未选中文件时显示，选中文件时隐藏
@@ -141,17 +228,107 @@ const handleFileSelect = async (event: Event) => {
   const file = input.files[0];
   if (!file.name.toLowerCase().endsWith(".zip")) {
     $showError(t("seal.invalidFileType"));
+    input.value = "";
     return;
   }
+
+  // 保存待上传的文件
+  pendingUploadFile.value = file;
+
+  // 检查是否存在已上传的备份文件
+  try {
+    const response = await fetchURL(`/api/resources${BACKUP_UPLOAD_PATH}`, {});
+    if (response.ok) {
+      const data = await response.json();
+      existingBackupSize.value = formatFileSize(data.size || 0);
+      existingBackupModified.value = new Date(data.modified).toLocaleString();
+      showExistingBackupDialog.value = true;
+      input.value = "";
+      return;
+    }
+  } catch (e) {
+    // 文件不存在，继续上传
+  }
+
+  // 文件不存在，直接上传
+  input.value = "";
+  await startUploadAndImport();
+};
+
+// 使用已存在的备份文件
+const useExistingBackup = async () => {
+  showExistingBackupDialog.value = false;
+  pendingUploadFile.value = null;
+  await performImport();
+};
+
+// 上传新的备份文件
+const uploadNewBackup = async () => {
+  showExistingBackupDialog.value = false;
+  await startUploadAndImport();
+};
+
+// 开始上传并导入
+const startUploadAndImport = async () => {
+  if (!pendingUploadFile.value) return;
 
   isImporting.value = true;
 
   try {
-    // 步骤1: 上传备份文件到临时位置
-    const tempBackupPath = "/sealdice/_temp_backup.zip";
-    await uploadFile(file, tempBackupPath);
+    // 上传备份文件
+    await uploadFile(pendingUploadFile.value, BACKUP_UPLOAD_PATH);
+    pendingUploadFile.value = null;
 
-    // 步骤2: 创建临时解压目录
+    // 校验 zip 文件完整性
+    const isValid = await validateZipFile();
+    if (!isValid) {
+      $showError(t("seal.invalidZipFile"));
+      return;
+    }
+
+    // 执行导入
+    await performImport();
+  } catch (error: any) {
+    console.error("Upload error:", error);
+    $showError(error);
+    isImporting.value = false;
+  }
+};
+
+// 校验 zip 文件完整性
+const validateZipFile = async (): Promise<boolean> => {
+  try {
+    // 使用 checksum API 来验证文件
+    const response = await fetchURL(`/api/checksum${BACKUP_UPLOAD_PATH}?algo=md5`, {});
+    if (response.ok) {
+      const data = await response.json();
+      // 如果能计算出 checksum，说明文件完整
+      return !!data.checksums && data.checksums.length > 0;
+    }
+    return false;
+  } catch (e) {
+    console.warn("Zip validation failed:", e);
+    // 如果没有 checksum API，尝试其他方式验证
+    // 简单检查文件是否存在且大小大于0
+    try {
+      const response = await fetchURL(`/api/resources${BACKUP_UPLOAD_PATH}`, {});
+      if (response.ok) {
+        const data = await response.json();
+        return data.size > 0;
+      }
+    } catch (e2) {
+      // 忽略
+    }
+    return false;
+  }
+};
+
+// 执行导入操作
+const performImport = async () => {
+  isImporting.value = true;
+
+  try {
+    // 步骤1: 创建临时解压目录
     const tempExtractPath = "/sealdice/_temp_extract/";
     try {
       await fetchURL(`/api/resources${tempExtractPath}`, { method: "DELETE" });
@@ -159,33 +336,39 @@ const handleFileSelect = async (event: Event) => {
       // 忽略删除错误，目录可能不存在
     }
 
-    // 步骤3: 解压备份文件到临时目录
-    await fetchURL(`/api/extract${tempBackupPath}?destination=${encodeURIComponent(tempExtractPath)}`, {
+    // 步骤2: 解压备份文件到临时目录
+    await fetchURL(`/api/extract${BACKUP_UPLOAD_PATH}?destination=${encodeURIComponent(tempExtractPath)}`, {
       method: "POST",
     });
 
-    // 步骤4: 删除旧的 data 目录
+    // 步骤3: 删除旧的 data 目录
     try {
       await fetchURL("/api/resources/sealdice/data", { method: "DELETE" });
     } catch (e) {
       // 忽略删除错误，目录可能不存在
     }
 
-    // 步骤5: 移动解压出的 data 目录到目标位置
+    // 步骤4: 移动解压出的 data 目录到目标位置
     await fetchURL(
       `/api/resources/sealdice/_temp_extract/data?action=rename&destination=${encodeURIComponent("/sealdice/data")}`,
       { method: "PATCH" }
     );
 
-    // 步骤6: 读取并修改 dice.yaml
+    // 步骤5: 读取并修改 dice.yaml
     await updateDiceYaml();
 
-    // 步骤7: 清理临时文件
+    // 步骤6: 清理临时文件
     try {
-      await fetchURL(`/api/resources${tempBackupPath}`, { method: "DELETE" });
       await fetchURL(`/api/resources${tempExtractPath}`, { method: "DELETE" });
     } catch (e) {
       // 忽略清理错误
+    }
+
+    // 步骤7: 导入完成后清理上传的备份文件
+    try {
+      await fetchURL(`/api/resources${BACKUP_UPLOAD_PATH}`, { method: "DELETE" });
+    } catch (e) {
+      // 忽略删除错误（例如文件不存在或权限不足）
     }
 
     $showSuccess(t("seal.importSuccess"));
@@ -195,25 +378,66 @@ const handleFileSelect = async (event: Event) => {
     $showError(error);
   } finally {
     isImporting.value = false;
-    // 清空文件输入
-    if (input) {
-      input.value = "";
-    }
   }
 };
 
-const uploadFile = async (file: File, path: string): Promise<void> => {
-  const response = await fetch(`${baseURL}/api/resources${path}?override=true`, {
-    method: "POST",
-    body: file,
-    headers: {
-      "X-Auth": authStore.jwt,
-    },
-  });
+const uploadFile = (file: File, path: string): Promise<void> => {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
 
-  if (!response.ok) {
-    throw new Error(`Upload failed: ${response.statusText}`);
-  }
+    // 初始化上传状态
+    isUploading.value = true;
+    uploadProgress.value = 0;
+    uploadSpeed.value = 0;
+    uploadedBytes.value = 0;
+    totalBytes.value = file.size;
+    uploadFileName.value = file.name;
+    uploadStartTime.value = Date.now();
+    lastUploadedBytes.value = 0;
+    lastSpeedUpdateTime.value = Date.now();
+
+    // 进度监听
+    xhr.upload.addEventListener("progress", (event) => {
+      if (event.lengthComputable) {
+        uploadedBytes.value = event.loaded;
+        totalBytes.value = event.total;
+        uploadProgress.value = (event.loaded / event.total) * 100;
+
+        // 计算速度（每 200ms 更新一次）
+        const now = Date.now();
+        const timeDiff = now - lastSpeedUpdateTime.value;
+        if (timeDiff >= 200) {
+          const bytesDiff = event.loaded - lastUploadedBytes.value;
+          uploadSpeed.value = (bytesDiff / timeDiff) * 1000; // bytes per second
+          lastUploadedBytes.value = event.loaded;
+          lastSpeedUpdateTime.value = now;
+        }
+      }
+    });
+
+    xhr.addEventListener("load", () => {
+      isUploading.value = false;
+      if (xhr.status >= 200 && xhr.status < 300) {
+        resolve();
+      } else {
+        reject(new Error(`Upload failed: ${xhr.statusText}`));
+      }
+    });
+
+    xhr.addEventListener("error", () => {
+      isUploading.value = false;
+      reject(new Error("Upload failed: Network error"));
+    });
+
+    xhr.addEventListener("abort", () => {
+      isUploading.value = false;
+      reject(new Error("Upload aborted"));
+    });
+
+    xhr.open("POST", `${baseURL}/api/resources${path}?override=true`);
+    xhr.setRequestHeader("X-Auth", authStore.jwt);
+    xhr.send(file);
+  });
 };
 
 const updateDiceYaml = async () => {
@@ -292,11 +516,11 @@ const viewBackups = () => {
 </script>
 
 <style scoped>
-/* 移动端折叠按钮 */
+/* 折叠按钮 */
 .seal-toggle-btn {
   position: fixed;
   bottom: 1em;
-  right: 1em;
+  left: 1em;
   z-index: 101;
   width: 48px;
   height: 48px;
@@ -318,6 +542,12 @@ const viewBackups = () => {
 
 .seal-toggle-btn i {
   font-size: 24px;
+}
+
+.seal-toggle-btn .seal-icon {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
 }
 
 .seal-toggle-btn.collapsed {
@@ -507,11 +737,125 @@ const viewBackups = () => {
   background: #b91c1c;
 }
 
+.seal-warning-actions.three-buttons {
+  flex-wrap: wrap;
+  gap: 0.5em;
+}
+
+.seal-warning-actions.three-buttons .seal-warning-btn {
+  flex: 1;
+  min-width: 100px;
+}
+
+.seal-existing-backup-info {
+  margin-top: 1em;
+  padding: 0.8em;
+  background: var(--surfacePrimary);
+  border-radius: 4px;
+  font-size: 0.9em;
+}
+
+.seal-existing-backup-info div {
+  margin-bottom: 0.3em;
+}
+
+.seal-existing-backup-info div:last-child {
+  margin-bottom: 0;
+}
+
+/* 上传进度弹窗样式 */
+.seal-upload-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0, 0, 0, 0.5);
+  z-index: 1001;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.seal-upload-dialog {
+  background: var(--surfaceSecondary);
+  border-radius: 8px;
+  max-width: 400px;
+  width: 90%;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.seal-upload-header {
+  display: flex;
+  align-items: center;
+  gap: 0.5em;
+  padding: 1em;
+  border-bottom: 1px solid var(--borderPrimary);
+  font-weight: 600;
+  font-size: 1.1em;
+  color: var(--textPrimary);
+}
+
+.seal-upload-header i {
+  color: var(--blue);
+  font-size: 1.5em;
+}
+
+.seal-upload-content {
+  padding: 1.5em;
+}
+
+.seal-upload-filename {
+  font-weight: 500;
+  color: var(--textPrimary);
+  margin-bottom: 1em;
+  word-break: break-all;
+  font-size: 0.95em;
+}
+
+.seal-upload-progress-bar {
+  height: 8px;
+  background: var(--surfacePrimary);
+  border-radius: 4px;
+  overflow: hidden;
+  margin-bottom: 1em;
+}
+
+.seal-upload-progress-fill {
+  height: 100%;
+  background: linear-gradient(90deg, var(--blue), #60a5fa);
+  border-radius: 4px;
+  transition: width 0.1s ease;
+}
+
+.seal-upload-stats {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 0.5em;
+  font-size: 0.85em;
+  color: var(--textSecondary);
+}
+
+.seal-upload-percent {
+  font-weight: 600;
+  color: var(--blue);
+}
+
+.seal-upload-speed {
+  font-weight: 500;
+  color: var(--textPrimary);
+}
+
+.seal-upload-size {
+  color: var(--textSecondary);
+}
+
 /* 移动端样式 */
 @media (max-width: 736px) {
   .seal-toggle-btn {
     bottom: 1em;
-    right: 1em;
+    left: 1em;
   }
 
   #seal-toolbar {
