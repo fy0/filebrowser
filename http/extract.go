@@ -24,7 +24,7 @@ import (
 // extractHandler handles archive extraction requests
 // POST /api/extract/{path}?destination=...&mode=...
 // mode: "here" (extract to same directory) or "subdir" (extract to subdirectory named after archive)
-var extractHandler = withUser(func(w http.ResponseWriter, r *http.Request, d *data) (int, error) {
+var extractHandler = withUser(func(_ http.ResponseWriter, r *http.Request, d *data) (int, error) {
 	if !d.user.Perm.Create {
 		return http.StatusForbidden, nil
 	}
@@ -338,20 +338,4 @@ func extractTarReader(afs afero.Fs, reader io.Reader, destination string, fileMo
 	}
 
 	return nil
-}
-
-// getSupportedArchiveFormats returns a list of supported archive formats
-func getSupportedArchiveFormats() []string {
-	return []string{".zip", ".tar.gz", ".tgz", ".tar"}
-}
-
-// isArchiveFile checks if a file is a supported archive
-func isArchiveFile(filename string) bool {
-	lower := strings.ToLower(filename)
-	for _, ext := range getSupportedArchiveFormats() {
-		if strings.HasSuffix(lower, ext) {
-			return true
-		}
-	}
-	return false
 }
