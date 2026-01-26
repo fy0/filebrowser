@@ -293,6 +293,7 @@
     "title": "Seal Assistant",
     "importBackup": "Import Backup",
     "importing": "Importing...",
+    "restoreFromExisting": "Restore Existing",
     "downloadLatest": "Download Latest",
     "viewBackups": "View Backups",
     "importSuccess": "Backup imported successfully!",
@@ -314,6 +315,9 @@
     "fileModified": "Modified",
     "useExisting": "Use Existing",
     "uploadNew": "Upload New",
+    "selectBackupTitle": "Select Backup File",
+    "selectBackupMessage": "Select an existing .zip backup file to restore from:",
+    "restoreNow": "Restore Now",
     "invalidZipFile": "Backup file validation failed, the file may be corrupted"
   }
 }

@@ -24,6 +24,15 @@
           <span>{{ isImporting ? t("seal.importing") : t("seal.importBackup") }}</span>
         </button>
         <button
+          @click="openSelectBackupDialog"
+          :title="t('seal.restoreFromExisting')"
+          class="seal-action"
+          :disabled="isImporting || isLoadingBackups"
+        >
+          <i class="material-icons">{{ isLoadingBackups ? 'hourglass_empty' : 'restore_page' }}</i>
+          <span>{{ t("seal.restoreFromExisting") }}</span>
+        </button>
+        <button
           @click="downloadLatestBackup"
           :title="t('seal.downloadLatest')"
           class="seal-action"
@@ -126,22 +135,63 @@
       </div>
     </div>
   </div>
+
+  <!-- 选择已有备份文件弹框 -->
+  <div v-if="showSelectBackup" class="seal-warning-overlay" @click.self="showSelectBackup = false">
+    <div class="seal-warning-dialog">
+      <div class="seal-warning-header">
+        <i class="material-icons" style="color: var(--blue);">restore_page</i>
+        <span>{{ t("seal.selectBackupTitle") }}</span>
+      </div>
+      <div class="seal-warning-content">
+        <p>{{ t("seal.selectBackupMessage") }}</p>
+        <div v-if="availableBackups.length === 0" class="seal-existing-backup-info">
+          <div>{{ t("seal.noBackupsFound") }}</div>
+        </div>
+        <div v-else class="seal-backup-list">
+          <label
+            v-for="item in availableBackups"
+            :key="item.path"
+            class="seal-backup-option"
+          >
+            <input type="radio" v-model="selectedBackupPath" :value="item.path" />
+            <div class="seal-backup-option-info">
+              <div class="seal-backup-option-name">{{ item.name }}</div>
+              <div class="seal-backup-option-meta">
+                {{ formatFileSize(item.size) }} · {{ new Date(item.modified).toLocaleString() }}
+              </div>
+            </div>
+          </label>
+        </div>
+      </div>
+      <div class="seal-warning-actions">
+        <button class="seal-warning-btn cancel" @click="showSelectBackup = false">
+          {{ t("buttons.cancel") }}
+        </button>
+        <button
+          class="seal-warning-btn confirm"
+          :disabled="availableBackups.length === 0"
+          @click="confirmSelectedBackup"
+        >
+          {{ t("seal.restoreNow") }}
+        </button>
+      </div>
+    </div>
+  </div>
 </template>
 
 <script setup lang="ts">
-import { computed, ref, inject, onUnmounted } from "vue";
+import { computed, ref, inject } from "vue";
 import { useRouter } from "vue-router";
 import { useI18n } from "vue-i18n";
 import { useFileStore } from "@/stores/file";
 import { files as api } from "@/api";
 import { fetchURL } from "@/api/utils";
-import { baseURL } from "@/utils/constants";
-import { useAuthStore } from "@/stores/auth";
+import { encodePath } from "@/utils/url";
 
 const { t } = useI18n();
 const router = useRouter();
 const fileStore = useFileStore();
-const authStore = useAuthStore();
 const $showError = inject<IToastError>("$showError")!;
 const $showSuccess = inject<IToastSuccess>("$showSuccess")!;
 
@@ -155,14 +205,30 @@ const isDownloading = ref(false);
 const isCollapsed = ref(props.isMobile); // 移动端默认折叠，桌面端默认展开
 const showImportWarning = ref(false);
 
-// 备份文件路径
-const BACKUP_UPLOAD_PATH = "/sealdice/__bak_upload.zip";
+// 已存在的备份文件路径（资源路径，不带 /files 前缀）
+const EXISTING_BACKUP_RESOURCE_PATH = "/sealdice/_bak.zip";
+// 导入上传使用的临时路径（避免覆盖用户已有的 _bak.zip）
+const UPLOAD_BACKUP_RESOURCE_PATH = "/sealdice/__bak_upload.zip";
+// 标准上传接口期望的路径（带 /files 前缀）
+const UPLOAD_BACKUP_FILE_URL = `/files${UPLOAD_BACKUP_RESOURCE_PATH}`;
 
 // 已存在备份文件弹窗相关
 const showExistingBackupDialog = ref(false);
 const existingBackupSize = ref("");
 const existingBackupModified = ref("");
 const pendingUploadFile = ref<File | null>(null);
+
+// 选择已有备份文件弹窗相关
+const showSelectBackup = ref(false);
+const isLoadingBackups = ref(false);
+const availableBackups = ref<
+  Array<{ name: string; path: string; size: number; modified: string }>
+>([]);
+const selectedBackupPath = ref("");
+
+// 导入模式（上传新文件 / 使用已有文件）
+const pendingImportMode = ref<"upload" | "existing">("upload");
+const pendingExistingBackupPath = ref<string | null>(null);
 
 // 上传进度相关
 const isUploading = ref(false);
@@ -207,17 +273,44 @@ const toggleCollapsed = () => {
 };
 
 const confirmImportBackup = () => {
+  pendingImportMode.value = "upload";
+  pendingExistingBackupPath.value = null;
   showImportWarning.value = true;
 };
 
-const proceedImport = () => {
+const proceedImport = async () => {
   showImportWarning.value = false;
+
+  if (pendingImportMode.value === "existing" && pendingExistingBackupPath.value) {
+    await importFromExistingBackup(pendingExistingBackupPath.value);
+    return;
+  }
+
+  // 上传模式：如果 _bak.zip 已存在，则先给出“直接使用/上传新文件”的选项
+  const existingInfo = await getExistingBackupInfo();
+  if (existingInfo) {
+    existingBackupSize.value = formatFileSize(existingInfo.size || 0);
+    existingBackupModified.value = new Date(existingInfo.modified).toLocaleString();
+    pendingUploadFile.value = null;
+    showExistingBackupDialog.value = true;
+    return;
+  }
+
   importBackup();
 };
 
 const importBackup = () => {
   if (fileInput.value) {
     fileInput.value.click();
+  }
+};
+
+const getExistingBackupInfo = async (): Promise<{ size: number; modified: string } | null> => {
+  try {
+    const response = await fetchURL(`/api/resources${EXISTING_BACKUP_RESOURCE_PATH}`, {});
+    return (await response.json()) as { size: number; modified: string };
+  } catch (e) {
+    return null;
   }
 };
 
@@ -234,23 +327,6 @@ const handleFileSelect = async (event: Event) => {
 
   // 保存待上传的文件
   pendingUploadFile.value = file;
-
-  // 检查是否存在已上传的备份文件
-  try {
-    const response = await fetchURL(`/api/resources${BACKUP_UPLOAD_PATH}`, {});
-    if (response.ok) {
-      const data = await response.json();
-      existingBackupSize.value = formatFileSize(data.size || 0);
-      existingBackupModified.value = new Date(data.modified).toLocaleString();
-      showExistingBackupDialog.value = true;
-      input.value = "";
-      return;
-    }
-  } catch (e) {
-    // 文件不存在，继续上传
-  }
-
-  // 文件不存在，直接上传
   input.value = "";
   await startUploadAndImport();
 };
@@ -259,185 +335,183 @@ const handleFileSelect = async (event: Event) => {
 const useExistingBackup = async () => {
   showExistingBackupDialog.value = false;
   pendingUploadFile.value = null;
-  await performImport();
+  await importFromExistingBackup(EXISTING_BACKUP_RESOURCE_PATH);
 };
 
 // 上传新的备份文件
 const uploadNewBackup = async () => {
   showExistingBackupDialog.value = false;
-  await startUploadAndImport();
+
+  if (pendingUploadFile.value) {
+    await startUploadAndImport();
+    return;
+  }
+
+  importBackup();
 };
 
 // 开始上传并导入
 const startUploadAndImport = async () => {
   if (!pendingUploadFile.value) return;
 
+  const file = pendingUploadFile.value;
+  pendingUploadFile.value = null;
   isImporting.value = true;
 
   try {
     // 上传备份文件
-    await uploadFile(pendingUploadFile.value, BACKUP_UPLOAD_PATH);
-    pendingUploadFile.value = null;
+    await uploadFile(file, UPLOAD_BACKUP_FILE_URL);
 
     // 校验 zip 文件完整性
-    const isValid = await validateZipFile();
-    if (!isValid) {
-      $showError(t("seal.invalidZipFile"));
-      return;
-    }
-
-    // 执行导入
-    await performImport();
+    await runImport(UPLOAD_BACKUP_RESOURCE_PATH, true);
   } catch (error: any) {
     console.error("Upload error:", error);
-    $showError(error);
-    isImporting.value = false;
-  }
-};
-
-// 校验 zip 文件完整性
-const validateZipFile = async (): Promise<boolean> => {
-  try {
-    // 使用 checksum API 来验证文件
-    const response = await fetchURL(`/api/checksum${BACKUP_UPLOAD_PATH}?algo=md5`, {});
-    if (response.ok) {
-      const data = await response.json();
-      // 如果能计算出 checksum，说明文件完整
-      return !!data.checksums && data.checksums.length > 0;
-    }
-    return false;
-  } catch (e) {
-    console.warn("Zip validation failed:", e);
-    // 如果没有 checksum API，尝试其他方式验证
-    // 简单检查文件是否存在且大小大于0
-    try {
-      const response = await fetchURL(`/api/resources${BACKUP_UPLOAD_PATH}`, {});
-      if (response.ok) {
-        const data = await response.json();
-        return data.size > 0;
-      }
-    } catch (e2) {
-      // 忽略
-    }
-    return false;
-  }
-};
-
-// 执行导入操作
-const performImport = async () => {
-  isImporting.value = true;
-
-  try {
-    // 步骤1: 创建临时解压目录
-    const tempExtractPath = "/sealdice/_temp_extract/";
-    try {
-      await fetchURL(`/api/resources${tempExtractPath}`, { method: "DELETE" });
-    } catch (e) {
-      // 忽略删除错误，目录可能不存在
-    }
-
-    // 步骤2: 解压备份文件到临时目录
-    await fetchURL(`/api/extract${BACKUP_UPLOAD_PATH}?destination=${encodeURIComponent(tempExtractPath)}`, {
-      method: "POST",
-    });
-
-    // 步骤3: 删除旧的 data 目录
-    try {
-      await fetchURL("/api/resources/sealdice/data", { method: "DELETE" });
-    } catch (e) {
-      // 忽略删除错误，目录可能不存在
-    }
-
-    // 步骤4: 移动解压出的 data 目录到目标位置
-    await fetchURL(
-      `/api/resources/sealdice/_temp_extract/data?action=rename&destination=${encodeURIComponent("/sealdice/data")}`,
-      { method: "PATCH" }
-    );
-
-    // 步骤5: 读取并修改 dice.yaml
-    await updateDiceYaml();
-
-    // 步骤6: 清理临时文件
-    try {
-      await fetchURL(`/api/resources${tempExtractPath}`, { method: "DELETE" });
-    } catch (e) {
-      // 忽略清理错误
-    }
-
-    // 步骤7: 导入完成后清理上传的备份文件
-    try {
-      await fetchURL(`/api/resources${BACKUP_UPLOAD_PATH}`, { method: "DELETE" });
-    } catch (e) {
-      // 忽略删除错误（例如文件不存在或权限不足）
-    }
-
-    $showSuccess(t("seal.importSuccess"));
-    fileStore.reload = true;
-  } catch (error: any) {
-    console.error("Import backup error:", error);
     $showError(error);
   } finally {
     isImporting.value = false;
   }
 };
 
-const uploadFile = (file: File, path: string): Promise<void> => {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
+// 校验 zip 文件完整性
+const validateZipFile = async (backupResourcePath: string): Promise<boolean> => {
+  try {
+    // 使用资源接口自带的 checksum 能力来验证文件可读性
+    const response = await fetchURL(
+      `/api/resources${backupResourcePath}?checksum=md5`,
+      {}
+    );
+    const data = (await response.json()) as { checksums?: Record<string, string> };
+    return !!data.checksums?.md5;
+  } catch (e) {
+    console.warn("Zip validation failed:", e);
+    try {
+      const response = await fetchURL(`/api/resources${backupResourcePath}`, {});
+      const data = (await response.json()) as { size?: number };
+      return (data.size || 0) > 0;
+    } catch (e2) {
+    }
+    return false;
+  }
+};
 
-    // 初始化上传状态
-    isUploading.value = true;
-    uploadProgress.value = 0;
-    uploadSpeed.value = 0;
-    uploadedBytes.value = 0;
-    totalBytes.value = file.size;
-    uploadFileName.value = file.name;
-    uploadStartTime.value = Date.now();
-    lastUploadedBytes.value = 0;
-    lastSpeedUpdateTime.value = Date.now();
-
-    // 进度监听
-    xhr.upload.addEventListener("progress", (event) => {
-      if (event.lengthComputable) {
-        uploadedBytes.value = event.loaded;
-        totalBytes.value = event.total;
-        uploadProgress.value = (event.loaded / event.total) * 100;
-
-        // 计算速度（每 200ms 更新一次）
-        const now = Date.now();
-        const timeDiff = now - lastSpeedUpdateTime.value;
-        if (timeDiff >= 200) {
-          const bytesDiff = event.loaded - lastUploadedBytes.value;
-          uploadSpeed.value = (bytesDiff / timeDiff) * 1000; // bytes per second
-          lastUploadedBytes.value = event.loaded;
-          lastSpeedUpdateTime.value = now;
-        }
+const runImport = async (backupResourcePath: string, cleanupBackupFile: boolean) => {
+  const isValid = await validateZipFile(backupResourcePath);
+  if (!isValid) {
+    if (cleanupBackupFile) {
+      try {
+        await fetchURL(`/api/resources${backupResourcePath}`, { method: "DELETE" });
+      } catch (e) {
+        // 忽略删除错误
       }
-    });
+    }
 
-    xhr.addEventListener("load", () => {
-      isUploading.value = false;
-      if (xhr.status >= 200 && xhr.status < 300) {
-        resolve();
-      } else {
-        reject(new Error(`Upload failed: ${xhr.statusText}`));
-      }
-    });
+    $showError(t("seal.invalidZipFile"));
+    return;
+  }
 
-    xhr.addEventListener("error", () => {
-      isUploading.value = false;
-      reject(new Error("Upload failed: Network error"));
-    });
+  try {
+    await performImport(backupResourcePath, cleanupBackupFile);
+    $showSuccess(t("seal.importSuccess"));
+    fileStore.reload = true;
+  } catch (error: any) {
+    console.error("Import backup error:", error);
+    $showError(error);
+  }
+};
 
-    xhr.addEventListener("abort", () => {
-      isUploading.value = false;
-      reject(new Error("Upload aborted"));
-    });
+const importFromExistingBackup = async (backupResourcePath: string) => {
+  isImporting.value = true;
+  try {
+    await runImport(backupResourcePath, false);
+  } finally {
+    isImporting.value = false;
+  }
+};
 
-    xhr.open("POST", `${baseURL}/api/resources${path}?override=true`);
-    xhr.setRequestHeader("X-Auth", authStore.jwt);
-    xhr.send(file);
+// 执行导入操作（不包含上传/校验/提示）
+const performImport = async (backupResourcePath: string, cleanupBackupFile: boolean) => {
+  // 步骤1: 创建临时解压目录
+  const tempExtractPath = "/sealdice/_temp_extract/";
+  try {
+    await fetchURL(`/api/resources${tempExtractPath}`, { method: "DELETE" });
+  } catch (e) {
+    // 忽略删除错误，目录可能不存在
+  }
+
+  // 步骤2: 解压备份文件到临时目录
+  await fetchURL(`/api/extract${backupResourcePath}?destination=${encodeURIComponent(tempExtractPath)}`, {
+    method: "POST",
   });
+
+  // 步骤3: 删除旧的 data 目录
+  try {
+    await fetchURL("/api/resources/sealdice/data", { method: "DELETE" });
+  } catch (e) {
+    // 忽略删除错误，目录可能不存在
+  }
+
+  // 步骤4: 移动解压出的 data 目录到目标位置
+  await fetchURL(
+    `/api/resources/sealdice/_temp_extract/data?action=rename&destination=${encodeURIComponent("/sealdice/data")}`,
+    { method: "PATCH" }
+  );
+
+  // 步骤5: 读取并修改 dice.yaml
+  await updateDiceYaml();
+
+  // 步骤6: 清理临时文件
+  try {
+    await fetchURL(`/api/resources${tempExtractPath}`, { method: "DELETE" });
+  } catch (e) {
+    // 忽略清理错误
+  }
+
+  // 步骤7: 导入完成后清理备份文件（仅在“上传导入”场景下）
+  if (cleanupBackupFile) {
+    try {
+      await fetchURL(`/api/resources${backupResourcePath}`, { method: "DELETE" });
+    } catch (e) {
+      // 忽略删除错误（例如文件不存在或权限不足）
+    }
+  }
+};
+
+const uploadFile = async (file: File, fileUrl: string): Promise<void> => {
+  // 初始化上传状态
+  isUploading.value = true;
+  uploadProgress.value = 0;
+  uploadSpeed.value = 0;
+  uploadedBytes.value = 0;
+  totalBytes.value = file.size;
+  uploadFileName.value = file.name;
+  uploadStartTime.value = Date.now();
+  lastUploadedBytes.value = 0;
+  lastSpeedUpdateTime.value = Date.now();
+
+  const onProgress = (event: any) => {
+    const loaded = typeof event?.loaded === "number" ? event.loaded : 0;
+    const total = typeof event?.total === "number" ? event.total : file.size;
+
+    uploadedBytes.value = loaded;
+    totalBytes.value = total;
+    uploadProgress.value = total > 0 ? (loaded / total) * 100 : 0;
+
+    // 计算速度（每 200ms 更新一次）
+    const now = Date.now();
+    const timeDiff = now - lastSpeedUpdateTime.value;
+    if (timeDiff >= 200) {
+      const bytesDiff = loaded - lastUploadedBytes.value;
+      uploadSpeed.value = (bytesDiff / timeDiff) * 1000; // bytes per second
+      lastUploadedBytes.value = loaded;
+      lastSpeedUpdateTime.value = now;
+    }
+  };
+
+  try {
+    await api.post(fileUrl, file, true, onProgress);
+  } finally {
+    isUploading.value = false;
+  }
 };
 
 const updateDiceYaml = async () => {
@@ -512,6 +586,103 @@ const downloadLatestBackup = async () => {
 
 const viewBackups = () => {
   router.push("/files/sealdice/backups/");
+};
+
+const openSelectBackupDialog = async () => {
+  isLoadingBackups.value = true;
+
+  try {
+    const backups: Array<{ name: string; path: string; size: number; modified: string }> = [];
+
+    const normalizeDir = (dir: string): string => {
+      if (!dir.startsWith("/")) dir = "/" + dir;
+      if (!dir.endsWith("/")) dir += "/";
+      return dir;
+    };
+
+    // 不扫描这些目录（避免扫到 sealdice/data 里大量文件；并按需求不从 backups 恢复）
+    const excludePrefixes = [
+      normalizeDir("/sealdice/data/"),
+      normalizeDir("/sealdice/backups/"),
+    ];
+
+    const isExcluded = (path: string): boolean => {
+      const normalized = path.startsWith("/") ? path : "/" + path;
+      return excludePrefixes.some((prefix) => normalized === prefix || normalized.startsWith(prefix));
+    };
+
+    // 扫描 /sealdice 下除 data/backups 之外的 zip
+    const queue: string[] = [normalizeDir("/sealdice/")];
+    const visited = new Set<string>();
+    const MAX_DIRS = 200;
+    const MAX_RESULTS = 200;
+
+    while (queue.length > 0 && visited.size < MAX_DIRS && backups.length < MAX_RESULTS) {
+      const dir = normalizeDir(queue.shift()!);
+      if (visited.has(dir) || isExcluded(dir)) continue;
+      visited.add(dir);
+
+      let listing: any;
+      try {
+        const res = await fetchURL(`/api/resources${encodePath(dir)}`, {});
+        listing = await res.json();
+      } catch (e) {
+        continue;
+      }
+
+      const items = (listing?.items || []) as any[];
+      for (const item of items) {
+        if (backups.length >= MAX_RESULTS) break;
+        const name = item?.name;
+        if (typeof name !== "string") continue;
+
+        if (item?.isDir) {
+          const childDir = normalizeDir(`${dir}${name}/`);
+          if (!isExcluded(childDir)) queue.push(childDir);
+          continue;
+        }
+
+        if (!name.toLowerCase().endsWith(".zip")) continue;
+
+        const filePath = `${dir}${name}`;
+        if (isExcluded(filePath)) continue;
+
+        backups.push({
+          name,
+          path: encodePath(filePath),
+          size: item.size || 0,
+          modified: item.modified,
+        });
+      }
+    }
+
+    // 去重 + 排序（最新在前）
+    const dedup = new Map<string, { name: string; path: string; size: number; modified: string }>();
+    for (const b of backups) {
+      if (!dedup.has(b.path)) dedup.set(b.path, b);
+    }
+
+    const sorted = Array.from(dedup.values()).sort(
+      (a, b) => new Date(b.modified).getTime() - new Date(a.modified).getTime()
+    );
+
+    availableBackups.value = sorted;
+    selectedBackupPath.value = sorted[0]?.path || "";
+    showSelectBackup.value = true;
+  } catch (error: any) {
+    console.error("List backups error:", error);
+    $showError(error);
+  } finally {
+    isLoadingBackups.value = false;
+  }
+};
+
+const confirmSelectedBackup = () => {
+  if (!selectedBackupPath.value) return;
+  showSelectBackup.value = false;
+  pendingImportMode.value = "existing";
+  pendingExistingBackupPath.value = selectedBackupPath.value;
+  showImportWarning.value = true;
 };
 </script>
 
@@ -761,6 +932,45 @@ const viewBackups = () => {
 
 .seal-existing-backup-info div:last-child {
   margin-bottom: 0;
+}
+
+.seal-backup-list {
+  margin-top: 0.5em;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5em;
+  max-height: 240px;
+  overflow: auto;
+  padding-right: 0.25em;
+}
+
+.seal-backup-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5em;
+  padding: 0.5em;
+  border-radius: 6px;
+  cursor: pointer;
+  border: 1px solid var(--divider);
+}
+
+.seal-backup-option:hover {
+  background: var(--surface);
+}
+
+.seal-backup-option-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15em;
+}
+
+.seal-backup-option-name {
+  font-weight: 600;
+}
+
+.seal-backup-option-meta {
+  opacity: 0.8;
+  font-size: 12px;
 }
 
 /* 上传进度弹窗样式 */

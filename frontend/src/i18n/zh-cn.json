@@ -293,6 +293,7 @@
     "title": "海豹助手",
     "importBackup": "导入备份",
     "importing": "导入中...",
+    "restoreFromExisting": "选择已有备份恢复",
     "downloadLatest": "下载最新备份",
     "viewBackups": "查看备份",
     "importSuccess": "备份导入成功！",
@@ -314,6 +315,9 @@
     "fileModified": "修改时间",
     "useExisting": "使用已有文件",
     "uploadNew": "上传新文件",
+    "selectBackupTitle": "选择备份文件",
+    "selectBackupMessage": "请选择要用于恢复的 .zip 备份文件：",
+    "restoreNow": "立即恢复",
     "invalidZipFile": "备份文件校验失败，文件可能已损坏"
   }
 }
