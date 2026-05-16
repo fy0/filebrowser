@@ -7,12 +7,15 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/spf13/afero"
@@ -77,6 +80,9 @@ var extractHandler = withUser(func(_ http.ResponseWriter, r *http.Request, d *da
 		return errToStatus(err), err
 	}
 
+	start := time.Now()
+	logExtractMemory("start", archivePath, destination, start)
+
 	// Determine archive type and extract
 	lowerPath := strings.ToLower(archivePath)
 	switch {
@@ -94,8 +100,39 @@ var extractHandler = withUser(func(_ http.ResponseWriter, r *http.Request, d *da
 		return errToStatus(err), err
 	}
 
+	logExtractMemory("done", archivePath, destination, start)
+
 	return http.StatusOK, nil
 })
+
+func logExtractMemory(stage, archivePath, destination string, start time.Time) {
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+	log.Printf(
+		"backup restore extract %s archive=%q destination=%q elapsed=%s alloc=%s heapSys=%s sys=%s numGC=%d",
+		stage,
+		archivePath,
+		destination,
+		time.Since(start).Round(time.Millisecond),
+		formatBytes(mem.Alloc),
+		formatBytes(mem.HeapSys),
+		formatBytes(mem.Sys),
+		mem.NumGC,
+	)
+}
+
+func formatBytes(n uint64) string {
+	const unit = 1024
+	if n < unit {
+		return fmt.Sprintf("%dB", n)
+	}
+	div, exp := uint64(unit), 0
+	for value := n / unit; value >= unit; value /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f%ciB", float64(n)/float64(div), "KMGTPE"[exp])
+}
 
 // getArchiveBaseName removes archive extensions from filename
 func getArchiveBaseName(filename string) string {

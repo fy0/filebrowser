@@ -395,19 +395,25 @@ const validateZipFile = async (backupResourcePath: string): Promise<boolean> => 
   }
 };
 
-const runImport = async (backupResourcePath: string, cleanupBackupFile: boolean) => {
-  const isValid = await validateZipFile(backupResourcePath);
-  if (!isValid) {
-    if (cleanupBackupFile) {
-      try {
-        await fetchURL(`/api/resources${backupResourcePath}`, { method: "DELETE" });
-      } catch (e) {
-        // 忽略删除错误
+const runImport = async (
+  backupResourcePath: string,
+  cleanupBackupFile: boolean,
+  validateBeforeImport = true
+) => {
+  if (validateBeforeImport) {
+    const isValid = await validateZipFile(backupResourcePath);
+    if (!isValid) {
+      if (cleanupBackupFile) {
+        try {
+          await fetchURL(`/api/resources${backupResourcePath}`, { method: "DELETE" });
+        } catch (e) {
+          // 忽略删除错误
+        }
       }
-    }
 
-    $showError(t("seal.invalidZipFile"));
-    return;
+      $showError(t("seal.invalidZipFile"));
+      return;
+    }
   }
 
   try {
@@ -423,7 +429,7 @@ const runImport = async (backupResourcePath: string, cleanupBackupFile: boolean)
 const importFromExistingBackup = async (backupResourcePath: string) => {
   isImporting.value = true;
   try {
-    await runImport(backupResourcePath, false);
+    await runImport(backupResourcePath, false, false);
   } finally {
     isImporting.value = false;
   }
