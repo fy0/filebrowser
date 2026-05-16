@@ -147,6 +147,7 @@
         <p>{{ t("seal.selectBackupMessage") }}</p>
         <div v-if="availableBackups.length === 0" class="seal-existing-backup-info">
           <div>{{ t("seal.noBackupsFound") }}</div>
+          <div>{{ t("seal.backupPlacementHint") }}</div>
         </div>
         <div v-else class="seal-backup-list">
           <label
@@ -158,7 +159,7 @@
             <div class="seal-backup-option-info">
               <div class="seal-backup-option-name">{{ item.name }}</div>
               <div class="seal-backup-option-meta">
-                {{ formatFileSize(item.size) }} · {{ new Date(item.modified).toLocaleString() }}
+                {{ item.displayPath }} · {{ formatFileSize(item.size) }} · {{ new Date(item.modified).toLocaleString() }}
               </div>
             </div>
           </label>
@@ -222,7 +223,7 @@ const pendingUploadFile = ref<File | null>(null);
 const showSelectBackup = ref(false);
 const isLoadingBackups = ref(false);
 const availableBackups = ref<
-  Array<{ name: string; path: string; size: number; modified: string }>
+  Array<{ name: string; path: string; displayPath: string; size: number; modified: string }>
 >([]);
 const selectedBackupPath = ref("");
 
@@ -592,7 +593,13 @@ const openSelectBackupDialog = async () => {
   isLoadingBackups.value = true;
 
   try {
-    const backups: Array<{ name: string; path: string; size: number; modified: string }> = [];
+    const backups: Array<{
+      name: string;
+      path: string;
+      displayPath: string;
+      size: number;
+      modified: string;
+    }> = [];
 
     const normalizeDir = (dir: string): string => {
       if (!dir.startsWith("/")) dir = "/" + dir;
@@ -600,28 +607,11 @@ const openSelectBackupDialog = async () => {
       return dir;
     };
 
-    // 不扫描这些目录（避免扫到 sealdice/data 里大量文件；并按需求不从 backups 恢复）
-    const excludePrefixes = [
-      normalizeDir("/sealdice/data/"),
-      normalizeDir("/sealdice/backups/"),
-    ];
-
-    const isExcluded = (path: string): boolean => {
-      const normalized = path.startsWith("/") ? path : "/" + path;
-      return excludePrefixes.some((prefix) => normalized === prefix || normalized.startsWith(prefix));
-    };
-
-    // 扫描 /sealdice 下除 data/backups 之外的 zip
-    const queue: string[] = [normalizeDir("/sealdice/")];
-    const visited = new Set<string>();
-    const MAX_DIRS = 200;
+    const scanDirs = ["/", "/sealdice/", "/sealdice/backups/"].map(normalizeDir);
     const MAX_RESULTS = 200;
 
-    while (queue.length > 0 && visited.size < MAX_DIRS && backups.length < MAX_RESULTS) {
-      const dir = normalizeDir(queue.shift()!);
-      if (visited.has(dir) || isExcluded(dir)) continue;
-      visited.add(dir);
-
+    for (const dir of scanDirs) {
+      if (backups.length >= MAX_RESULTS) break;
       let listing: any;
       try {
         const res = await fetchURL(`/api/resources${encodePath(dir)}`, {});
@@ -635,21 +625,13 @@ const openSelectBackupDialog = async () => {
         if (backups.length >= MAX_RESULTS) break;
         const name = item?.name;
         if (typeof name !== "string") continue;
-
-        if (item?.isDir) {
-          const childDir = normalizeDir(`${dir}${name}/`);
-          if (!isExcluded(childDir)) queue.push(childDir);
-          continue;
-        }
-
-        if (!name.toLowerCase().endsWith(".zip")) continue;
-
+        if (item?.isDir || !name.toLowerCase().endsWith(".zip")) continue;
         const filePath = `${dir}${name}`;
-        if (isExcluded(filePath)) continue;
 
         backups.push({
           name,
           path: encodePath(filePath),
+          displayPath: filePath,
           size: item.size || 0,
           modified: item.modified,
         });
@@ -657,7 +639,10 @@ const openSelectBackupDialog = async () => {
     }
 
     // 去重 + 排序（最新在前）
-    const dedup = new Map<string, { name: string; path: string; size: number; modified: string }>();
+    const dedup = new Map<
+      string,
+      { name: string; path: string; displayPath: string; size: number; modified: string }
+    >();
     for (const b of backups) {
       if (!dedup.has(b.path)) dedup.set(b.path, b);
     }

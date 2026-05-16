@@ -298,6 +298,7 @@
     "viewBackups": "View Backups",
     "importSuccess": "Backup imported successfully!",
     "noBackupsFound": "No backup files found",
+    "backupPlacementHint": "Place it in the root directory, /sealdice, or /sealdice/backups",
     "invalidFileType": "Please select a .zip backup file",
     "expand": "Expand Seal Assistant",
     "collapse": "Collapse Seal Assistant",

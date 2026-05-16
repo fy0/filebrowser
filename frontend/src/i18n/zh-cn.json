@@ -298,6 +298,7 @@
     "viewBackups": "查看备份",
     "importSuccess": "备份导入成功！",
     "noBackupsFound": "没有找到备份文件",
+    "backupPlacementHint": "请放在根目录、/sealdice 目录或 /sealdice/backups 目录",
     "invalidFileType": "请选择 .zip 格式的备份文件",
     "expand": "展开海豹助手",
     "collapse": "收起海豹助手",
