@@ -14,6 +14,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -22,6 +23,12 @@ import (
 	"golang.org/x/text/encoding/simplifiedchinese"
 
 	"github.com/filebrowser/filebrowser/v2/files"
+)
+
+const (
+	extractCopyBufferSize = 32 * 1024
+	extractCacheDropEvery = 8 * 1024 * 1024
+	extractLogEvery       = 64 * 1024 * 1024
 )
 
 // extractHandler handles archive extraction requests
@@ -87,11 +94,11 @@ var extractHandler = withUser(func(_ http.ResponseWriter, r *http.Request, d *da
 	lowerPath := strings.ToLower(archivePath)
 	switch {
 	case strings.HasSuffix(lowerPath, ".zip"):
-		err = extractZip(d.user.Fs, archivePath, destination, d.settings.FileMode, d.settings.DirMode)
+		err = extractZip(d.user.Fs, archivePath, destination, d.settings.FileMode, d.settings.DirMode, start)
 	case strings.HasSuffix(lowerPath, ".tar.gz") || strings.HasSuffix(lowerPath, ".tgz"):
-		err = extractTarGz(d.user.Fs, archivePath, destination, d.settings.FileMode, d.settings.DirMode)
+		err = extractTarGz(d.user.Fs, archivePath, destination, d.settings.FileMode, d.settings.DirMode, start)
 	case strings.HasSuffix(lowerPath, ".tar"):
-		err = extractTar(d.user.Fs, archivePath, destination, d.settings.FileMode, d.settings.DirMode)
+		err = extractTar(d.user.Fs, archivePath, destination, d.settings.FileMode, d.settings.DirMode, start)
 	default:
 		return http.StatusBadRequest, errors.New("unsupported archive format: only .zip, .tar.gz, .tgz, and .tar are supported")
 	}
@@ -109,7 +116,7 @@ func logExtractMemory(stage, archivePath, destination string, start time.Time) {
 	var mem runtime.MemStats
 	runtime.ReadMemStats(&mem)
 	log.Printf(
-		"backup restore extract %s archive=%q destination=%q elapsed=%s alloc=%s heapSys=%s sys=%s numGC=%d",
+		"backup restore extract %s archive=%q destination=%q elapsed=%s alloc=%s heapSys=%s sys=%s numGC=%d cgroup=%q",
 		stage,
 		archivePath,
 		destination,
@@ -118,7 +125,89 @@ func logExtractMemory(stage, archivePath, destination string, start time.Time) {
 		formatBytes(mem.HeapSys),
 		formatBytes(mem.Sys),
 		mem.NumGC,
+		readCgroupMemorySummary(),
 	)
+}
+
+func logExtractProgress(progress *extractProgress, stage string) {
+	var mem runtime.MemStats
+	runtime.ReadMemStats(&mem)
+	log.Printf(
+		"backup restore extract %s archive=%q destination=%q elapsed=%s files=%d/%d bytes=%s/%s alloc=%s heapSys=%s sys=%s numGC=%d cgroup=%q",
+		stage,
+		progress.archivePath,
+		progress.destination,
+		time.Since(progress.start).Round(time.Millisecond),
+		progress.files,
+		progress.totalFiles,
+		formatBytes(progress.bytes),
+		formatBytes(progress.totalBytes),
+		formatBytes(mem.Alloc),
+		formatBytes(mem.HeapSys),
+		formatBytes(mem.Sys),
+		mem.NumGC,
+		readCgroupMemorySummary(),
+	)
+}
+
+func readCgroupMemorySummary() string {
+	current := readCgroupMemoryValue("/sys/fs/cgroup/memory.current")
+	if current == "" {
+		current = readCgroupMemoryValue("/sys/fs/cgroup/memory/memory.usage_in_bytes")
+	}
+	if current == "" {
+		return "n/a"
+	}
+
+	statPath := "/sys/fs/cgroup/memory.stat"
+	if _, err := os.Stat(statPath); err != nil {
+		statPath = "/sys/fs/cgroup/memory/memory.stat"
+	}
+
+	anon, file := "", ""
+	if data, err := os.ReadFile(statPath); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			fields := strings.Fields(line)
+			if len(fields) != 2 {
+				continue
+			}
+			switch fields[0] {
+			case "anon", "total_inactive_anon":
+				if anon == "" {
+					anon = formatCgroupBytes(fields[1])
+				}
+			case "file", "total_cache":
+				if file == "" {
+					file = formatCgroupBytes(fields[1])
+				}
+			}
+		}
+	}
+
+	parts := []string{"current=" + current}
+	if anon != "" {
+		parts = append(parts, "anon="+anon)
+	}
+	if file != "" {
+		parts = append(parts, "file="+file)
+	}
+	return strings.Join(parts, " ")
+}
+
+func readCgroupMemoryValue(filePath string) string {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return ""
+	}
+	return formatCgroupBytes(strings.TrimSpace(string(data)))
+}
+
+func formatCgroupBytes(value string) string {
+	n, err := strconv.ParseUint(value, 10, 64)
+	if err != nil {
+		return value
+	}
+	return formatBytes(n)
 }
 
 func formatBytes(n uint64) string {
@@ -132,6 +221,50 @@ func formatBytes(n uint64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f%ciB", float64(n)/float64(div), "KMGTPE"[exp])
+}
+
+type extractProgress struct {
+	archivePath string
+	destination string
+	start       time.Time
+	totalFiles  int
+	totalBytes  uint64
+	files       int
+	bytes       uint64
+	lastBytes   uint64
+	lastLog     time.Time
+}
+
+func newExtractProgress(archivePath, destination string, start time.Time, totalFiles int, totalBytes uint64) *extractProgress {
+	return &extractProgress{
+		archivePath: archivePath,
+		destination: destination,
+		start:       start,
+		totalFiles:  totalFiles,
+		totalBytes:  totalBytes,
+		lastLog:     start,
+	}
+}
+
+func (p *extractProgress) addBytes(n int) {
+	if n <= 0 {
+		return
+	}
+	p.bytes += uint64(n)
+	if p.bytes-p.lastBytes >= extractLogEvery || time.Since(p.lastLog) >= 10*time.Second {
+		p.lastBytes = p.bytes
+		p.lastLog = time.Now()
+		logExtractProgress(p, "progress")
+	}
+}
+
+func (p *extractProgress) finishFile() {
+	p.files++
+	if p.files%50 == 0 || p.files == p.totalFiles {
+		p.lastBytes = p.bytes
+		p.lastLog = time.Now()
+		logExtractProgress(p, "progress")
+	}
 }
 
 // getArchiveBaseName removes archive extensions from filename
@@ -152,24 +285,47 @@ func getArchiveBaseName(filename string) string {
 }
 
 // extractZip extracts a ZIP archive using streaming (low memory usage)
-func extractZip(afs afero.Fs, archivePath, destination string, fileMode, dirMode os.FileMode) error {
+func extractZip(afs afero.Fs, archivePath, destination string, fileMode, dirMode os.FileMode, start time.Time) error {
 	// Get the real path for zip.OpenReader
 	realPath := archivePath
 	if bpfs, ok := afs.(*afero.BasePathFs); ok {
 		realPath = afero.FullBaseFsPath(bpfs, archivePath)
 	}
 
-	// Open the zip file
-	zipReader, err := zip.OpenReader(realPath)
+	archiveFile, err := os.Open(realPath)
 	if err != nil {
 		return fmt.Errorf("failed to open zip file: %w", err)
 	}
-	defer zipReader.Close()
+	defer archiveFile.Close()
+	adviseFileSequential(archiveFile)
+
+	info, err := archiveFile.Stat()
+	if err != nil {
+		return fmt.Errorf("failed to stat zip file: %w", err)
+	}
+
+	zipReader, err := zip.NewReader(archiveFile, info.Size())
+	if err != nil {
+		return fmt.Errorf("failed to open zip file: %w", err)
+	}
+
+	totalFiles, totalBytes := 0, uint64(0)
+	for _, f := range zipReader.File {
+		if !f.FileInfo().IsDir() {
+			totalFiles++
+			totalBytes += f.UncompressedSize64
+		}
+	}
+	progress := newExtractProgress(archivePath, destination, start, totalFiles, totalBytes)
+	dropArchiveCache := func() {
+		adviseFileDontNeed(archiveFile, 0, 0)
+	}
 
 	for _, f := range zipReader.File {
-		if err := extractZipFile(afs, f, destination, fileMode, dirMode); err != nil {
+		if err := extractZipFile(afs, f, destination, fileMode, dirMode, progress, dropArchiveCache); err != nil {
 			return err
 		}
+		dropArchiveCache()
 	}
 
 	return nil
@@ -213,7 +369,7 @@ func decodeZipFileName(name string, flags uint16) string {
 }
 
 // extractZipFile extracts a single file from a ZIP archive
-func extractZipFile(afs afero.Fs, f *zip.File, destination string, fileMode, dirMode os.FileMode) error {
+func extractZipFile(afs afero.Fs, f *zip.File, destination string, fileMode, dirMode os.FileMode, progress *extractProgress, sourceDrop func()) error {
 	// Decode file name (handle GBK encoding)
 	fileName := decodeZipFileName(f.Name, f.Flags)
 
@@ -253,18 +409,16 @@ func extractZipFile(afs afero.Fs, f *zip.File, destination string, fileMode, dir
 	}
 	defer outFile.Close()
 
-	// Stream copy with limited buffer (8KB) to minimize memory usage
-	buf := make([]byte, 8*1024)
-	_, err = io.CopyBuffer(outFile, rc, buf)
-	if err != nil {
+	if _, err := copyWithCacheControl(outFile, rc, afs, targetPath, progress, sourceDrop); err != nil {
 		return fmt.Errorf("failed to extract file: %w", err)
 	}
+	progress.finishFile()
 
 	return nil
 }
 
 // extractTarGz extracts a .tar.gz archive using streaming
-func extractTarGz(afs afero.Fs, archivePath, destination string, fileMode, dirMode os.FileMode) error {
+func extractTarGz(afs afero.Fs, archivePath, destination string, fileMode, dirMode os.FileMode, start time.Time) error {
 	// Get the real path
 	realPath := archivePath
 	if bpfs, ok := afs.(*afero.BasePathFs); ok {
@@ -277,6 +431,7 @@ func extractTarGz(afs afero.Fs, archivePath, destination string, fileMode, dirMo
 		return fmt.Errorf("failed to open archive: %w", err)
 	}
 	defer file.Close()
+	adviseFileSequential(file)
 
 	// Create gzip reader
 	gzReader, err := gzip.NewReader(file)
@@ -285,11 +440,16 @@ func extractTarGz(afs afero.Fs, archivePath, destination string, fileMode, dirMo
 	}
 	defer gzReader.Close()
 
-	return extractTarReader(afs, gzReader, destination, fileMode, dirMode)
+	dropArchiveCache := func() {
+		adviseFileDontNeed(file, 0, 0)
+	}
+	err = extractTarReader(afs, gzReader, archivePath, destination, fileMode, dirMode, start, dropArchiveCache)
+	adviseFileDontNeed(file, 0, 0)
+	return err
 }
 
 // extractTar extracts a .tar archive using streaming
-func extractTar(afs afero.Fs, archivePath, destination string, fileMode, dirMode os.FileMode) error {
+func extractTar(afs afero.Fs, archivePath, destination string, fileMode, dirMode os.FileMode, start time.Time) error {
 	// Get the real path
 	realPath := archivePath
 	if bpfs, ok := afs.(*afero.BasePathFs); ok {
@@ -302,16 +462,20 @@ func extractTar(afs afero.Fs, archivePath, destination string, fileMode, dirMode
 		return fmt.Errorf("failed to open archive: %w", err)
 	}
 	defer file.Close()
+	adviseFileSequential(file)
 
-	return extractTarReader(afs, file, destination, fileMode, dirMode)
+	dropArchiveCache := func() {
+		adviseFileDontNeed(file, 0, 0)
+	}
+	err = extractTarReader(afs, file, archivePath, destination, fileMode, dirMode, start, dropArchiveCache)
+	adviseFileDontNeed(file, 0, 0)
+	return err
 }
 
 // extractTarReader extracts from a tar reader (used by both tar and tar.gz)
-func extractTarReader(afs afero.Fs, reader io.Reader, destination string, fileMode, dirMode os.FileMode) error {
+func extractTarReader(afs afero.Fs, reader io.Reader, archivePath, destination string, fileMode, dirMode os.FileMode, start time.Time, sourceDrop func()) error {
 	tarReader := tar.NewReader(reader)
-
-	// Use a buffer for streaming extraction
-	buf := make([]byte, 8*1024)
+	progress := newExtractProgress(archivePath, destination, start, 0, 0)
 
 	for {
 		header, err := tarReader.Next()
@@ -353,12 +517,12 @@ func extractTarReader(afs afero.Fs, reader io.Reader, destination string, fileMo
 				return fmt.Errorf("failed to create file: %w", err)
 			}
 
-			// Stream copy
-			_, err = io.CopyBuffer(outFile, tarReader, buf)
+			_, err = copyWithCacheControl(outFile, tarReader, afs, targetPath, progress, sourceDrop)
 			outFile.Close()
 			if err != nil {
 				return fmt.Errorf("failed to extract file: %w", err)
 			}
+			progress.finishFile()
 
 		case tar.TypeSymlink:
 			// Skip symlinks for security
@@ -375,4 +539,65 @@ func extractTarReader(afs afero.Fs, reader io.Reader, destination string, fileMo
 	}
 
 	return nil
+}
+
+type cacheDroppingWriter struct {
+	file     afero.File
+	afs      afero.Fs
+	path     string
+	progress *extractProgress
+	source   func()
+	written  int64
+	nextDrop int64
+}
+
+func (w *cacheDroppingWriter) Write(p []byte) (int, error) {
+	n, err := w.file.Write(p)
+	if n > 0 {
+		w.written += int64(n)
+		w.progress.addBytes(n)
+		if w.written >= w.nextDrop {
+			w.flushAndDrop()
+			w.nextDrop = w.written + extractCacheDropEvery
+		}
+	}
+	return n, err
+}
+
+func (w *cacheDroppingWriter) flushAndDrop() {
+	_ = w.file.Sync()
+	if realPath, ok := realFsPath(w.afs, w.path); ok {
+		advisePathDontNeed(realPath)
+	}
+	if w.source != nil {
+		w.source()
+	}
+}
+
+func copyWithCacheControl(dst afero.File, src io.Reader, afs afero.Fs, targetPath string, progress *extractProgress, sourceDrop func()) (int64, error) {
+	writer := &cacheDroppingWriter{
+		file:     dst,
+		afs:      afs,
+		path:     targetPath,
+		progress: progress,
+		source:   sourceDrop,
+		nextDrop: extractCacheDropEvery,
+	}
+	buf := make([]byte, extractCopyBufferSize)
+	written, err := io.CopyBuffer(writer, src, buf)
+	writer.flushAndDrop()
+	return written, err
+}
+
+func realFsPath(afs afero.Fs, filePath string) (string, bool) {
+	if bpfs, ok := afs.(*afero.BasePathFs); ok {
+		return afero.FullBaseFsPath(bpfs, filePath), true
+	}
+
+	switch afs.(type) {
+	case afero.OsFs, *afero.OsFs:
+		return filePath, true
+	}
+
+	return "", false
 }
