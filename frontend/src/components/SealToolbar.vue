@@ -42,6 +42,21 @@
           <span>{{ t("seal.downloadLatest") }}</span>
         </button>
         <button
+          @click="confirmClearUIPassword"
+          :title="t('seal.clearUIPassword')"
+          class="seal-action"
+          :disabled="isClearingUIPassword"
+        >
+          <i class="material-icons">{{
+            isClearingUIPassword ? "hourglass_empty" : "lock_open"
+          }}</i>
+          <span>{{
+            isClearingUIPassword
+              ? t("seal.clearingUIPassword")
+              : t("seal.clearUIPassword")
+          }}</span>
+        </button>
+        <button
           @click="viewBackups"
           :title="t('seal.viewBackups')"
           class="seal-action"
@@ -179,6 +194,45 @@
       </div>
     </div>
   </div>
+  <!-- 清除海豹UI密码确认弹框 -->
+  <div
+    v-if="showClearUIPasswordDialog"
+    class="seal-warning-overlay"
+    @click.self="closeClearUIPasswordDialog"
+  >
+    <div class="seal-warning-dialog">
+      <div class="seal-warning-header">
+        <i class="material-icons" style="color: var(--blue)">lock_open</i>
+        <span>{{ t("seal.clearUIPasswordConfirmTitle") }}</span>
+      </div>
+      <div class="seal-warning-content">
+        <p>{{ t("seal.clearUIPasswordConfirmMessage") }}</p>
+        <ul>
+          <li>{{ t("seal.clearUIPasswordConfirmItem1") }}</li>
+          <li>{{ t("seal.clearUIPasswordConfirmItem2") }}</li>
+        </ul>
+        <p class="seal-warning-disclaimer">
+          {{ t("seal.clearUIPasswordConfirmDisclaimer") }}
+        </p>
+      </div>
+      <div class="seal-warning-actions">
+        <button
+          class="seal-warning-btn cancel"
+          @click="closeClearUIPasswordDialog"
+          :disabled="isClearingUIPassword"
+        >
+          {{ t("buttons.cancel") }}
+        </button>
+        <button
+          class="seal-warning-btn confirm"
+          @click="clearUIPassword"
+          :disabled="isClearingUIPassword"
+        >
+          {{ t("seal.clearUIPasswordConfirm") }}
+        </button>
+      </div>
+    </div>
+  </div>
 </template>
 
 <script setup lang="ts">
@@ -203,8 +257,10 @@ const props = defineProps<{
 const fileInput = ref<HTMLInputElement | null>(null);
 const isImporting = ref(false);
 const isDownloading = ref(false);
+const isClearingUIPassword = ref(false);
 const isCollapsed = ref(props.isMobile); // 移动端默认折叠，桌面端默认展开
 const showImportWarning = ref(false);
+const showClearUIPasswordDialog = ref(false);
 
 // 已存在的备份文件路径（资源路径，不带 /files 前缀）
 const EXISTING_BACKUP_RESOURCE_PATH = "/sealdice/_bak.zip";
@@ -271,6 +327,11 @@ const shouldHide = computed(() => {
 
 const toggleCollapsed = () => {
   isCollapsed.value = !isCollapsed.value;
+};
+
+const confirmClearUIPassword = () => {
+  if (isClearingUIPassword.value) return;
+  showClearUIPasswordDialog.value = true;
 };
 
 const confirmImportBackup = () => {
@@ -548,6 +609,58 @@ const updateDiceYaml = async () => {
   } catch (e) {
     console.warn("Failed to update dice.yaml:", e);
     // 不抛出错误，因为文件可能不存在
+  }
+};
+
+const clearDiceYamlUIPasswordFields = (content: string): string => {
+  const setEmptyField = (yaml: string, key: string): string => {
+    const linePattern = new RegExp(`^(\\s*${key}\\s*:\\s*).*$`, "m");
+    if (linePattern.test(yaml)) {
+      return yaml.replace(linePattern, (_line, prefix) => `${prefix}""`);
+    }
+
+    const separator = yaml.endsWith("\n") || yaml.length === 0 ? "" : "\n";
+    return `${yaml}${separator}${key}: ""\n`;
+  };
+
+  return setEmptyField(
+    setEmptyField(content, "UIPasswordFrontendSalt"),
+    "uiPasswordHash"
+  );
+};
+
+const closeClearUIPasswordDialog = () => {
+  if (isClearingUIPassword.value) return;
+  showClearUIPasswordDialog.value = false;
+};
+
+const clearUIPassword = async () => {
+  if (isClearingUIPassword.value) return;
+  showClearUIPasswordDialog.value = false;
+  isClearingUIPassword.value = true;
+
+  try {
+    const response = await fetchURL(
+      "/api/resources/sealdice/data/dice.yaml",
+      {}
+    );
+    const fileInfo = await response.json();
+    const content =
+      typeof fileInfo.content === "string" ? fileInfo.content : "";
+    const nextContent = clearDiceYamlUIPasswordFields(content);
+
+    await fetchURL("/api/resources/sealdice/data/dice.yaml", {
+      method: "PUT",
+      body: nextContent,
+    });
+
+    $showSuccess(t("seal.clearUIPasswordSuccess"));
+    fileStore.reload = true;
+  } catch (error: any) {
+    console.error("Clear UI password error:", error);
+    $showError(error);
+  } finally {
+    isClearingUIPassword.value = false;
   }
 };
 
