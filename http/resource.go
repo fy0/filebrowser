@@ -262,7 +262,7 @@ func addVersionSuffix(source string, afs afero.Fs) string {
 	return source
 }
 
-func writeFile(afs afero.Fs, dst string, in io.Reader, fileMode, dirMode fs.FileMode) (os.FileInfo, error) {
+func writeFile(afs afero.Fs, dst string, in io.Reader, fileMode, dirMode fs.FileMode) (_ os.FileInfo, retErr error) {
 	dir, _ := path.Split(dst)
 	err := afs.MkdirAll(dir, dirMode)
 	if err != nil {
@@ -273,9 +273,9 @@ func writeFile(afs afero.Fs, dst string, in io.Reader, fileMode, dirMode fs.File
 	if err != nil {
 		return nil, err
 	}
-	defer file.Close()
+	defer func() { retErr = errors.Join(retErr, file.Close()) }()
 
-	_, err = io.Copy(file, in)
+	_, err = fileutils.CopyWithCacheControl(file, in, nil, nil, nil)
 	if err != nil {
 		return nil, err
 	}

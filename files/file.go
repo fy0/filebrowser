@@ -24,6 +24,7 @@ import (
 	"github.com/spf13/afero"
 
 	fberrors "github.com/filebrowser/filebrowser/v2/errors"
+	"github.com/filebrowser/filebrowser/v2/fileutils"
 	"github.com/filebrowser/filebrowser/v2/rules"
 )
 
@@ -196,7 +197,7 @@ func (i *FileInfo) Checksum(algo string) error {
 		return fberrors.ErrInvalidOption
 	}
 
-	_, err = io.Copy(h, reader)
+	_, err = fileutils.CopyWithCacheControl(h, reader, nil, nil, nil)
 	if err != nil {
 		return err
 	}

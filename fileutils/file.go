@@ -1,7 +1,7 @@
 package fileutils
 
 import (
-	"io"
+	"errors"
 	"io/fs"
 	"os"
 	"path"
@@ -31,7 +31,7 @@ func MoveFile(afs afero.Fs, src, dst string, fileMode, dirMode fs.FileMode) erro
 
 // CopyFile copies a file from source to dest and returns
 // an error if any.
-func CopyFile(afs afero.Fs, source, dest string, fileMode, dirMode fs.FileMode) error {
+func CopyFile(afs afero.Fs, source, dest string, fileMode, dirMode fs.FileMode) (retErr error) {
 	// Open the source file.
 	src, err := afs.Open(source)
 	if err != nil {
@@ -51,10 +51,10 @@ func CopyFile(afs afero.Fs, source, dest string, fileMode, dirMode fs.FileMode) 
 	if err != nil {
 		return err
 	}
-	defer dst.Close()
+	defer func() { retErr = errors.Join(retErr, dst.Close()) }()
 
 	// Copy the contents of the file.
-	_, err = io.Copy(dst, src)
+	_, err = CopyWithCacheControl(dst, src, nil, nil, nil)
 	if err != nil {
 		return err
 	}

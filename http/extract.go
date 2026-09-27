@@ -23,12 +23,11 @@ import (
 	"golang.org/x/text/encoding/simplifiedchinese"
 
 	"github.com/filebrowser/filebrowser/v2/files"
+	"github.com/filebrowser/filebrowser/v2/fileutils"
 )
 
 const (
-	extractCopyBufferSize = 32 * 1024
-	extractCacheDropEvery = 8 * 1024 * 1024
-	extractLogEvery       = 64 * 1024 * 1024
+	extractLogEvery = 64 * 1024 * 1024
 )
 
 // extractHandler handles archive extraction requests
@@ -233,6 +232,7 @@ type extractProgress struct {
 	bytes       uint64
 	lastBytes   uint64
 	lastLog     time.Time
+	buffer      []byte
 }
 
 func newExtractProgress(archivePath, destination string, start time.Time, totalFiles int, totalBytes uint64) *extractProgress {
@@ -243,6 +243,7 @@ func newExtractProgress(archivePath, destination string, start time.Time, totalF
 		totalFiles:  totalFiles,
 		totalBytes:  totalBytes,
 		lastLog:     start,
+		buffer:      make([]byte, fileutils.StreamBufferSize),
 	}
 }
 
@@ -407,9 +408,8 @@ func extractZipFile(afs afero.Fs, f *zip.File, destination string, fileMode, dir
 	if err != nil {
 		return fmt.Errorf("failed to create file: %w", err)
 	}
-	defer outFile.Close()
-
-	if _, err := copyWithCacheControl(outFile, rc, afs, targetPath, progress, sourceDrop); err != nil {
+	_, copyErr := copyWithCacheControl(outFile, rc, progress, sourceDrop)
+	if err := errors.Join(copyErr, outFile.Close()); err != nil {
 		return fmt.Errorf("failed to extract file: %w", err)
 	}
 	progress.finishFile()
@@ -517,8 +517,8 @@ func extractTarReader(afs afero.Fs, reader io.Reader, archivePath, destination s
 				return fmt.Errorf("failed to create file: %w", err)
 			}
 
-			_, err = copyWithCacheControl(outFile, tarReader, afs, targetPath, progress, sourceDrop)
-			outFile.Close()
+			_, err = copyWithCacheControl(outFile, tarReader, progress, sourceDrop)
+			err = errors.Join(err, outFile.Close())
 			if err != nil {
 				return fmt.Errorf("failed to extract file: %w", err)
 			}
@@ -541,63 +541,6 @@ func extractTarReader(afs afero.Fs, reader io.Reader, archivePath, destination s
 	return nil
 }
 
-type cacheDroppingWriter struct {
-	file     afero.File
-	afs      afero.Fs
-	path     string
-	progress *extractProgress
-	source   func()
-	written  int64
-	nextDrop int64
-}
-
-func (w *cacheDroppingWriter) Write(p []byte) (int, error) {
-	n, err := w.file.Write(p)
-	if n > 0 {
-		w.written += int64(n)
-		w.progress.addBytes(n)
-		if w.written >= w.nextDrop {
-			w.flushAndDrop()
-			w.nextDrop = w.written + extractCacheDropEvery
-		}
-	}
-	return n, err
-}
-
-func (w *cacheDroppingWriter) flushAndDrop() {
-	_ = w.file.Sync()
-	if realPath, ok := realFsPath(w.afs, w.path); ok {
-		advisePathDontNeed(realPath)
-	}
-	if w.source != nil {
-		w.source()
-	}
-}
-
-func copyWithCacheControl(dst afero.File, src io.Reader, afs afero.Fs, targetPath string, progress *extractProgress, sourceDrop func()) (int64, error) {
-	writer := &cacheDroppingWriter{
-		file:     dst,
-		afs:      afs,
-		path:     targetPath,
-		progress: progress,
-		source:   sourceDrop,
-		nextDrop: extractCacheDropEvery,
-	}
-	buf := make([]byte, extractCopyBufferSize)
-	written, err := io.CopyBuffer(writer, src, buf)
-	writer.flushAndDrop()
-	return written, err
-}
-
-func realFsPath(afs afero.Fs, filePath string) (string, bool) {
-	if bpfs, ok := afs.(*afero.BasePathFs); ok {
-		return afero.FullBaseFsPath(bpfs, filePath), true
-	}
-
-	switch afs.(type) {
-	case afero.OsFs, *afero.OsFs:
-		return filePath, true
-	}
-
-	return "", false
+func copyWithCacheControl(dst afero.File, src io.Reader, progress *extractProgress, sourceDrop func()) (int64, error) {
+	return fileutils.CopyWithCacheControl(dst, src, progress.buffer, progress.addBytes, sourceDrop)
 }

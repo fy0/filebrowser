@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -16,6 +15,7 @@ import (
 	"github.com/spf13/afero"
 
 	"github.com/filebrowser/filebrowser/v2/files"
+	"github.com/filebrowser/filebrowser/v2/fileutils"
 )
 
 const maxUploadWait = 3 * time.Minute
@@ -251,7 +251,8 @@ func tusPatchHandler() handleFunc {
 		}
 
 		defer r.Body.Close()
-		bytesWritten, err := io.Copy(openFile, r.Body)
+		bytesWritten, err := fileutils.CopyWithCacheControl(openFile, r.Body, nil, nil, nil)
+		err = errors.Join(err, openFile.Close())
 		if err != nil {
 			return http.StatusInternalServerError, fmt.Errorf("could not write to file: %w", err)
 		}
